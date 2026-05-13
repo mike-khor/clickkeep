@@ -6,41 +6,80 @@ import { COPY } from '../copy/strings.js';
 import { BeatIndicator } from './BeatIndicator.js';
 import { TapButton } from './TapButton.js';
 
+// Must exceed the scheduler's lookahead (100ms) so a tempo change can never
+// race a beat that's already been queued for audio playback. 150ms gives a
+// safe margin without an audible gap.
+const HANDOFF_LOOKAHEAD_MS = 150;
+
+interface Anchor {
+  startAt: number;
+  bpm: number;
+  beatsPerBar: number;
+}
+
 export function SoloMetronome(): JSX.Element {
   const { bpm, beatsPerBar, isPlaying, currentBeat, setBpm, setBeatsPerBar, setPlaying, setCurrentBeat } =
     useMetronome();
   const runningRef = useRef<RunningClick | null>(null);
+  const anchorRef = useRef<Anchor | null>(null);
+  // Read latest beatsPerBar inside the scheduler callback without rebinding it,
+  // so signature changes also flow through without restarting the engine.
+  const beatsPerBarRef = useRef(beatsPerBar);
+  beatsPerBarRef.current = beatsPerBar;
 
+  // Start / stop the click engine on play toggle. We intentionally do NOT list
+  // bpm or beatsPerBar in this effect's deps: rapid slider input would tear
+  // down and recreate the scheduler on each change, and each fresh scheduler
+  // fires its first beat immediately ("frenzied burst"). Tempo changes are
+  // handled by the seamless-handoff effect below.
   useEffect(() => {
     if (!isPlaying) {
       runningRef.current?.stop();
       runningRef.current = null;
+      anchorRef.current = null;
       return;
     }
     const ctx = getAudioContext();
     // Solo mode anchors the tempo map at "now". Server time === local time here.
     const startAt = performance.now();
-    const tempo = [{ startAt, bpm, beatsPerBar }];
-    runningRef.current = startClick(tempo, {
-      audioCtx: ctx,
-      nowServerMs: () => performance.now(),
-      onBeatScheduled: (beat) => {
-        // Schedule UI flash + haptic at the audio time. requestAnimationFrame
-        // alignment is approximate; for solo mode this is good enough.
-        setTimeout(() => {
-          setCurrentBeat(beat);
-          if (beat % beatsPerBar === 0) pulse(60);
-          else pulse(20);
-        }, 0);
-      },
-    });
+    const anchor: Anchor = { startAt, bpm, beatsPerBar };
+    anchorRef.current = anchor;
+    runningRef.current = startScheduler(ctx, anchor, setCurrentBeat, beatsPerBarRef);
     return () => {
       runningRef.current?.stop();
       runningRef.current = null;
+      anchorRef.current = null;
     };
-    // We intentionally restart the engine on tempo / signature change rather than
-    // mutating it mid-flight; the scheduler is simple by design.
-  }, [isPlaying, bpm, beatsPerBar, setCurrentBeat]);
+    // bpm / beatsPerBar deliberately excluded — see comment above and handoff effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, setCurrentBeat]);
+
+  // Seamless handoff on tempo / signature change while playing. Anchor the new
+  // scheduler to the next natural beat boundary at the OLD tempo (skipping any
+  // beat that's already inside the audio lookahead, to avoid a double-click).
+  // From the new scheduler's perspective, that anchor is "beat 0 at startAt",
+  // which sits in the future — so no instant click fires.
+  useEffect(() => {
+    if (!isPlaying) return;
+    const prev = anchorRef.current;
+    if (prev === null) return;
+    if (prev.bpm === bpm && prev.beatsPerBar === beatsPerBar) return;
+
+    const now = performance.now();
+    const oldPeriodMs = 60_000 / prev.bpm;
+    // Time of the next beat boundary at the old tempo.
+    const elapsed = now - prev.startAt;
+    const beatsElapsed = Math.max(0, elapsed / oldPeriodMs);
+    let nextBeatAt = prev.startAt + Math.ceil(beatsElapsed) * oldPeriodMs;
+    // Push past any beat already in the audio lookahead window.
+    while (nextBeatAt - now < HANDOFF_LOOKAHEAD_MS) nextBeatAt += oldPeriodMs;
+
+    const ctx = getAudioContext();
+    const nextAnchor: Anchor = { startAt: nextBeatAt, bpm, beatsPerBar };
+    runningRef.current?.stop();
+    anchorRef.current = nextAnchor;
+    runningRef.current = startScheduler(ctx, nextAnchor, setCurrentBeat, beatsPerBarRef);
+  }, [bpm, beatsPerBar, isPlaying, setCurrentBeat]);
 
   return (
     <div className="flex flex-col items-center gap-8">
@@ -96,4 +135,29 @@ export function SoloMetronome(): JSX.Element {
       </div>
     </div>
   );
+}
+
+function startScheduler(
+  ctx: AudioContext,
+  anchor: Anchor,
+  setCurrentBeat: (beat: number) => void,
+  beatsPerBarRef: { current: number },
+): RunningClick {
+  const tempo = [{ startAt: anchor.startAt, bpm: anchor.bpm, beatsPerBar: anchor.beatsPerBar }];
+  return startClick(tempo, {
+    audioCtx: ctx,
+    nowServerMs: () => performance.now(),
+    onBeatScheduled: (beat) => {
+      // Schedule UI flash + haptic at the audio time. requestAnimationFrame
+      // alignment is approximate; for solo mode this is good enough.
+      setTimeout(() => {
+        setCurrentBeat(beat);
+        // Read the latest signature so handoffs feel correct on the very
+        // first beat after a change, even before React re-renders.
+        const bpbNow = beatsPerBarRef.current;
+        if (beat % bpbNow === 0) pulse(60);
+        else pulse(20);
+      }, 0);
+    },
+  });
 }
