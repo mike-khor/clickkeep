@@ -24,6 +24,8 @@ export const COPY = {
     leave: 'Leave',
     membersOne: 'member',
     membersMany: 'members',
+    memberHint: 'Session owner controls tempo.',
+    ownerBadge: 'you are the owner',
   },
   theme: {
     light: 'Light',

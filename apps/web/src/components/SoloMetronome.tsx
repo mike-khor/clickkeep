@@ -19,14 +19,36 @@ interface Anchor {
 }
 
 export function SoloMetronome(): JSX.Element {
-  const { bpm, beatsPerBar, isPlaying, currentBeat, setBpm, setBeatsPerBar, setPlaying, setCurrentBeat } =
-    useMetronome();
+  const {
+    bpm,
+    beatsPerBar,
+    isPlaying,
+    currentBeat,
+    sessionRole,
+    setBpm,
+    setBeatsPerBar,
+    setPlaying,
+    setCurrentBeat,
+  } = useMetronome();
   const runningRef = useRef<RunningClick | null>(null);
   const anchorRef = useRef<Anchor | null>(null);
   // Read latest beatsPerBar inside the scheduler callback without rebinding it,
   // so signature changes also flow through without restarting the engine.
   const beatsPerBarRef = useRef(beatsPerBar);
   beatsPerBarRef.current = beatsPerBar;
+
+  // Members listen, they don't drive: lock every tempo / playback affordance.
+  // The Tier-3 worker rejects set-state/play/pause from non-owners; this is the
+  // UX half of the same invariant so members never even attempt a desync.
+  const isMember = sessionRole === 'member';
+
+  // If the user was clicking locally and then joins someone else's session,
+  // their solo engine has to stop — otherwise it would keep firing audio while
+  // they wait for the owner's anchor. Owner state will replace this once
+  // Concert Mode wires the worker state through.
+  useEffect(() => {
+    if (isMember && isPlaying) setPlaying(false);
+  }, [isMember, isPlaying, setPlaying]);
 
   // Local editing buffer for the typed BPM input. We keep a string so users can
   // freely type "12", "120.", "120.5", etc. without us snapping mid-keystroke.
@@ -159,17 +181,19 @@ export function SoloMetronome(): JSX.Element {
         step={1}
         value={bpm}
         onChange={(e) => setBpm(Number(e.target.value))}
-        className="w-full max-w-md accent-accent"
+        disabled={isMember}
+        className="w-full max-w-md accent-accent disabled:opacity-50 disabled:cursor-not-allowed"
         aria-label={COPY.solo.bpm}
       />
 
       <div className="flex items-center gap-4">
-        <label className="flex items-center gap-2 text-sm">
+        <label className={['flex items-center gap-2 text-sm', isMember ? 'opacity-50' : ''].join(' ')}>
           <span className="text-ink-500 dark:text-ink-400">{COPY.solo.beatsPerBar}</span>
           <select
             value={beatsPerBar}
             onChange={(e) => setBeatsPerBar(Number(e.target.value))}
-            className="rounded-md border border-ink-200 dark:border-ink-700 bg-transparent px-2 py-1"
+            disabled={isMember}
+            className="rounded-md border border-ink-200 dark:border-ink-700 bg-transparent px-2 py-1 disabled:cursor-not-allowed"
           >
             {[2, 3, 4, 5, 6, 7, 8].map((n) => (
               <option key={n} value={n}>
@@ -181,22 +205,33 @@ export function SoloMetronome(): JSX.Element {
       </div>
 
       <div className="flex items-center gap-6">
-        <TapButton onBpm={setBpm} />
+        <TapButton onBpm={setBpm} disabled={isMember} />
         <button
           type="button"
           onClick={() => setPlaying(!isPlaying)}
+          disabled={isMember}
           className={[
             'h-20 rounded-full px-10 text-lg font-semibold',
             'transition-transform active:scale-95',
+            'disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100',
             isPlaying
               ? 'bg-ink-800 dark:bg-ink-100 text-ink-50 dark:text-ink-900'
-              : 'bg-accent text-ink-900 hover:bg-accent-600',
+              : 'bg-accent text-ink-900 hover:bg-accent-600 disabled:hover:bg-accent',
           ].join(' ')}
         >
           {isPlaying ? COPY.solo.stop : COPY.solo.play}
         </button>
         <MuteButton />
       </div>
+
+      {isMember && (
+        <div
+          role="status"
+          className="text-sm text-ink-500 dark:text-ink-400"
+        >
+          {COPY.session.memberHint}
+        </div>
+      )}
     </div>
   );
 }
