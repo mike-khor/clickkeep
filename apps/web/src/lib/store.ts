@@ -20,7 +20,12 @@ export const useMetronome = create<MetronomeState>((set) => ({
   isPlaying: false,
   currentBeat: 0,
   muted: false,
-  setBpm: (bpm) => set({ bpm: clamp(bpm, 30, 300) }),
+  // Floats are allowed (e.g. 120.5). Integer callers (slider, tap-tempo) still work
+  // because clamp is a pure numeric operation. Display layers should call .toFixed(1).
+  setBpm: (bpm) => {
+    if (!Number.isFinite(bpm)) return;
+    set({ bpm: clamp(bpm, 30, 300) });
+  },
   setBeatsPerBar: (beatsPerBar) => set({ beatsPerBar: clamp(beatsPerBar, 1, 12) }),
   setPlaying: (isPlaying) => set({ isPlaying }),
   setCurrentBeat: (currentBeat) => set({ currentBeat }),
