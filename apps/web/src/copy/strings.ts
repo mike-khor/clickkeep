@@ -12,6 +12,9 @@ export const COPY = {
     tapHint: 'Tap to set tempo',
     bpm: 'BPM',
     beatsPerBar: 'Beats per bar',
+    mute: 'Mute click',
+    unmute: 'Unmute click',
+    muted: 'Muted',
   },
   session: {
     create: 'Create session',
