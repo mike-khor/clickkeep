@@ -32,8 +32,12 @@ Tier matches the auto-merge tier the work is expected to touch (see CLAUDE.md). 
 
 ## Later (parking lot)
 
-- Capacitor wrap for iOS + Android (native audio for lower latency, native haptics)
-- Apple Watch app (SwiftUI, WatchConnectivity bridge to phone app)
+- [tier:2] [size:M] Bootstrap Capacitor iOS wrap — run `npx cap init` / `npx cap add ios` per `apps/ios/README.md`; commit generated `capacitor.config.ts` and `Podfile.lock`, gitignore the Xcode project (plan: `docs/MOBILE.md`)
+- [tier:2] [size:M] Haptic mode parity (Capacitor Haptics) — swap `packages/click-engine/src/haptic.ts` to dispatch `@capacitor/haptics` on native, keep `navigator.vibrate` fallback for web (intensity table in `docs/MOBILE.md` §3)
+- [tier:3] [size:L] Bootstrap Apple Watch SwiftUI app — add `ClickKeepWatch` target inside the iOS workspace, port `BeatScheduler` + `SyncMath`, relay state via `WatchConnectivity` (plan: `apps/watch/README.md`)
+- [tier:3] [size:M] TestFlight CI/CD for iOS builds — GitHub Actions workflow on a self-hosted macOS runner (or `macos-14` hosted) that archives the iOS app and uploads to App Store Connect via `xcrun altool` / Fastlane; gated on the paid Developer Program account
+- Capacitor wrap for Android (native audio for lower latency, native haptics)
+- Apple Watch solo mode — WebSocket-direct from the Watch when no paired iPhone is nearby
 - Wear OS app (Compose)
 - Tuner module (microphone pitch detection, A=432/440/442 reference)
 - Pitch pipe (drone tones, instrument-aware presets)
