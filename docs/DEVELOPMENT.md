@@ -82,6 +82,22 @@ pnpm build        # production builds for web + worker
 
 CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) runs the same commands on every PR.
 
+## Running e2e tests
+
+The repo has a Playwright suite that exercises real session sync across two browser contexts. It lives in `apps/web/e2e/` and is configured in `apps/web/playwright.config.ts`.
+
+```bash
+pnpm test:e2e
+```
+
+The Playwright config auto-starts both the session worker (`pnpm worker:dev` on :8787) and the web app (`pnpm dev` on :5173) via its `webServer` array, reusing them if you already have them running locally. The Chromium browser must be installed once with:
+
+```bash
+pnpm --filter @clickkeep/web exec playwright install chromium
+```
+
+These tests are deliberately **not** included in `pnpm test` (the default vitest recipe) and CI does not run them yet — they're a manual smoke check while group-sync correctness is still landing.
+
 ## Common issues
 
 **`pnpm worker:dev` says "out of date wrangler"** — ignore. The version pinned in `workers/session/package.json` is fine. Upgrading wrangler is a Tier 3 change (it touches a `dependencies` entry in the worker); file an issue if you need a newer version.
