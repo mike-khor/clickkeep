@@ -1,6 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SessionClient } from '../lib/session-client.js';
 import { useMetronome } from '../lib/store.js';
+import {
+  clearHash,
+  forgetOwnerSecret,
+  readCodeFromHash,
+  recallOwnerSecret,
+  rememberOwnerSecret,
+  writeCodeToHash,
+} from '../lib/url-session.js';
 import { COPY } from '../copy/strings.js';
 
 const WORKER_URL = (import.meta.env.VITE_SESSION_WORKER_URL as string | undefined) ?? 'http://localhost:8787';
@@ -23,6 +31,14 @@ export function SessionPanel(): JSX.Element {
   const [client, setClient] = useState<SessionClient | null>(null);
   const setSessionRole = useMetronome((s) => s.setSessionRole);
   const sessionRole = useMetronome((s) => s.sessionRole);
+  // Tracks the code of the connection we *automatically* started from the URL
+  // on mount. If that connection errors out (e.g. 404 because the session
+  // expired) we want to clear the hash and show "Session expired" rather than
+  // silently leave a dead code in the address bar.
+  const autoConnectCodeRef = useRef<string | null>(null);
+  // StrictMode double-runs the mount effect; this guard makes sure we don't
+  // open two WebSockets to the same session on the first render.
+  const didAutoConnectRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -55,7 +71,17 @@ export function SessionPanel(): JSX.Element {
         setRttMs(Math.round(e.rttMs));
       },
       onError: (_code, msg) => {
-        setError(msg);
+        // If this failure was for the session we tried to auto-rejoin from
+        // the URL, the code in the URL is stale — wipe it and tell the user.
+        if (autoConnectCodeRef.current === codeToUse) {
+          clearHash();
+          forgetOwnerSecret(codeToUse);
+          autoConnectCodeRef.current = null;
+          setError('Session expired');
+          setCode('');
+        } else {
+          setError(msg);
+        }
         setStatus('error');
         // A claim-owner failure or any other socket error means we can't
         // trust the role we just optimistically set. Fall back to solo.
@@ -69,6 +95,27 @@ export function SessionPanel(): JSX.Element {
     setClient(c);
   };
 
+  // On mount: if the URL already has a valid session code, try to rejoin it.
+  // If sessionStorage also has the matching owner secret, we'll reclaim owner
+  // status — otherwise we join as a member.
+  useEffect(() => {
+    if (didAutoConnectRef.current) return;
+    didAutoConnectRef.current = true;
+    const codeFromUrl = readCodeFromHash();
+    if (codeFromUrl === null) return;
+    const secret = recallOwnerSecret(codeFromUrl);
+    setCode(codeFromUrl);
+    autoConnectCodeRef.current = codeFromUrl;
+    if (secret !== null) {
+      // We have a secret stashed, so we *believe* we're the owner. Surface
+      // that in the UI right away by setting `created` — the actual ownership
+      // claim happens inside SessionClient.onOpen via claim-owner.
+      setCreated({ code: codeFromUrl, sessionId: '', ownerSecret: secret });
+    }
+    connect(codeFromUrl, secret);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional mount-only
+  }, []);
+
   const handleCreate = async (): Promise<void> => {
     setError(null);
     try {
@@ -77,6 +124,8 @@ export function SessionPanel(): JSX.Element {
       const body = (await res.json()) as CreatedSession;
       setCreated(body);
       setCode(body.code);
+      writeCodeToHash(body.code);
+      rememberOwnerSecret(body.code, body.ownerSecret);
       connect(body.code, body.ownerSecret);
     } catch (e) {
       setError(String(e));
@@ -91,12 +140,17 @@ export function SessionPanel(): JSX.Element {
       setError('Code must be 4 characters');
       return;
     }
-    connect(code.toUpperCase(), null);
+    const upper = code.toUpperCase();
+    writeCodeToHash(upper);
+    connect(upper, null);
   };
 
   const handleLeave = (): void => {
     client?.close();
     setClient(null);
+    if (code) forgetOwnerSecret(code);
+    clearHash();
+    autoConnectCodeRef.current = null;
     setCreated(null);
     setCode('');
     setMemberCount(0);
