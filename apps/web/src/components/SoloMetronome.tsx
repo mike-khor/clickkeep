@@ -125,7 +125,8 @@ export function SoloMetronome(): JSX.Element {
           // the same width so toggling between view and edit modes doesn't shift layout.
           className={[
             'w-[7ch] bg-transparent text-center text-6xl font-bold tabular-nums tracking-tight',
-            'border-none outline-none focus:outline-none',
+            'cursor-text rounded-md border-none outline-none',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
             'appearance-none [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]',
           ].join(' ')}
           value={bpmDraft ?? bpm.toFixed(1)}
