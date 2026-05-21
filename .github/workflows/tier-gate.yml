@@ -1,0 +1,234 @@
+# Tier-gated auto-merge for agent-authored PRs.
+#
+# Policy (mirrors CLAUDE.md — DO NOT diverge):
+#   tier 1 (auto-merge):    only changes within an allowlist of low-risk paths
+#   tier 2 (notify owner):  most app code; comment with summary, no auto-merge
+#   tier 3 (hard block):    sync logic, workers, workflows, .claude/, AGENT_GUARDRAIL
+#
+# Classification is path-based. NO LLM in the safety decision.
+# A PR is only Tier 1 if EVERY changed file matches the Tier 1 allowlist.
+
+name: Tier gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    outputs:
+      tier: ${{ steps.tier.outputs.tier }}
+      reason: ${{ steps.tier.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: List changed files
+        id: files
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          echo "Changed files:"
+          echo "$CHANGED"
+          {
+            echo 'files<<EOF'
+            echo "$CHANGED"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check for AGENT_GUARDRAIL markers
+        id: guardrail
+        run: |
+          if git diff origin/${{ github.base_ref }}...HEAD | grep -q "AGENT_GUARDRAIL"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check package.json dependencies/scripts changes
+        id: pkgcheck
+        run: |
+          BASE_REF="origin/${{ github.base_ref }}"
+          PKG_FILES=$(git diff --name-only "$BASE_REF"...HEAD | grep -E '(^|/)package\.json$' || true)
+          if [ -z "$PKG_FILES" ]; then
+            echo "tier3=false" >> "$GITHUB_OUTPUT"
+            echo "reason=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          REASON=""
+          for f in $PKG_FILES; do
+            BASE_CONTENT=$(git show "$BASE_REF:$f" 2>/dev/null || echo "")
+            HEAD_CONTENT=$(git show "HEAD:$f" 2>/dev/null || echo "")
+            if [ -z "$BASE_CONTENT" ] || [ -z "$HEAD_CONTENT" ]; then
+              REASON="$f added or removed"
+              break
+            fi
+            BASE_DEPS=$(echo "$BASE_CONTENT" | jq -cS '.dependencies // {}')
+            HEAD_DEPS=$(echo "$HEAD_CONTENT" | jq -cS '.dependencies // {}')
+            if [ "$BASE_DEPS" != "$HEAD_DEPS" ]; then
+              REASON="$f dependencies changed"
+              break
+            fi
+            BASE_SCRIPTS=$(echo "$BASE_CONTENT" | jq -cS '.scripts // {}')
+            HEAD_SCRIPTS=$(echo "$HEAD_CONTENT" | jq -cS '.scripts // {}')
+            if [ "$BASE_SCRIPTS" != "$HEAD_SCRIPTS" ]; then
+              REASON="$f scripts changed"
+              break
+            fi
+          done
+          if [ -n "$REASON" ]; then
+            echo "tier3=true" >> "$GITHUB_OUTPUT"
+            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          else
+            echo "tier3=false" >> "$GITHUB_OUTPUT"
+            echo "reason=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Classify tier
+        id: tier
+        env:
+          FILES: ${{ steps.files.outputs.files }}
+          GUARDRAIL: ${{ steps.guardrail.outputs.found }}
+          PKG_TIER3: ${{ steps.pkgcheck.outputs.tier3 }}
+          PKG_REASON: ${{ steps.pkgcheck.outputs.reason }}
+        run: |
+          python3 <<'PY'
+          import os, re, sys
+
+          files = [f for f in os.environ["FILES"].splitlines() if f.strip()]
+          guardrail = os.environ["GUARDRAIL"] == "true"
+          pkg_tier3 = os.environ.get("PKG_TIER3") == "true"
+          pkg_reason = os.environ.get("PKG_REASON", "")
+
+          tier3_patterns = [
+              r"^packages/sync-core/",
+              r"^packages/click-engine/src/scheduler\.ts$",
+              r"^workers/",
+              r"^\.github/workflows/",
+              r"^\.claude/",
+              r"^CLAUDE\.md$",
+              r"^BACKLOG\.md$",
+          ]
+          tier1_patterns = [
+              r"^apps/web/src/copy/",
+              r"^apps/web/src/styles/colors\.ts$",
+              r"^apps/web/public/",
+              r"^[^/]*\.md$",
+              r"^docs/",
+          ]
+          # CLAUDE.md and BACKLOG.md are explicitly tier 3 above; the .md catch-all is fine
+          # because tier 3 is evaluated first.
+
+          def matches(path, patterns):
+              return any(re.search(p, path) for p in patterns)
+
+          reason_parts = []
+          tier = 1
+
+          if guardrail:
+              tier = 3
+              reason_parts.append("AGENT_GUARDRAIL marker present in diff")
+
+          tier3_hits = [f for f in files if matches(f, tier3_patterns)]
+          if tier3_hits:
+              tier = 3
+              reason_parts.append(f"Tier-3 paths touched: {', '.join(tier3_hits[:5])}{'...' if len(tier3_hits) > 5 else ''}")
+
+          if pkg_tier3:
+              tier = 3
+              reason_parts.append(f"Tier-3 package.json change: {pkg_reason}")
+
+          if tier != 3:
+              # Tier 1 requires *every* file to match the tier-1 allowlist.
+              non_t1 = [f for f in files if not matches(f, tier1_patterns)]
+              if non_t1:
+                  tier = 2
+                  reason_parts.append(f"{len(non_t1)} file(s) outside Tier-1 allowlist: {', '.join(non_t1[:5])}{'...' if len(non_t1) > 5 else ''}")
+              else:
+                  reason_parts.append(f"All {len(files)} file(s) in Tier-1 allowlist")
+
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a") as fh:
+              fh.write(f"tier={tier}\n")
+              fh.write(f"reason={' | '.join(reason_parts)}\n")
+          PY
+
+      - name: Comment classification
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tier = "${{ steps.tier.outputs.tier }}";
+            const reason = `${{ steps.tier.outputs.reason }}`;
+            const emoji = tier === "1" ? "🟢" : tier === "2" ? "🟡" : "🔴";
+            const action = {
+              "1": "will auto-merge once CI passes",
+              "2": "owner review required",
+              "3": "BLOCKED — requires explicit `/approve` comment from owner"
+            }[tier];
+            const body = [
+              `### ${emoji} Tier ${tier} — ${action}`,
+              ``,
+              `**Why:** ${reason}`,
+              ``,
+              `<sub>Classification is path-based (see [CLAUDE.md](../blob/main/CLAUDE.md#agent-guardrails-read-this-if-you-are-a-github-actions-agent)). Re-run by pushing a new commit.</sub>`
+            ].join("\n");
+            // Find prior tier-gate comment and update it instead of spamming.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, per_page: 100
+            });
+            const prior = comments.find(c => c.user.type === "Bot" && c.body.includes("Tier ") && c.body.includes("Classification is path-based"));
+            if (prior) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: prior.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body
+              });
+            }
+
+  auto-merge:
+    needs: classify
+    if: needs.classify.outputs.tier == '1'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge --auto --squash "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}"
+
+  block-tier3:
+    needs: classify
+    if: needs.classify.outputs.tier == '3'
+    runs-on: ubuntu-latest
+    steps:
+      # Tier 3 is enforced as a required failing check. Owner can unblock by adding
+      # an `approved-tier-3` label to the PR; a separate workflow watches for that label
+      # and re-runs this job which then passes.
+      - name: Check for approval label
+        id: label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LABELS=$(gh pr view "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --json labels --jq '.labels[].name')
+          if echo "$LABELS" | grep -q "^approved-tier-3$"; then
+            echo "approved=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Fail if not approved
+        if: steps.label.outputs.approved != 'true'
+        run: |
+          echo "::error::Tier 3 change requires owner approval. Add the 'approved-tier-3' label after review."
+          exit 1

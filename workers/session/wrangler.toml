@@ -1,0 +1,21 @@
+name = "clickkeep-session"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "SESSION"
+class_name = "SessionDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionDO"]
+
+[[kv_namespaces]]
+binding = "JOIN_CODES"
+# Run `wrangler kv:namespace create JOIN_CODES` to create and paste the id here.
+id = "PLACEHOLDER_PRODUCTION_KV_ID"
+preview_id = "PLACEHOLDER_PREVIEW_KV_ID"
+
+[observability]
+enabled = true

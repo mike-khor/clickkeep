@@ -1,0 +1,39 @@
+# deps
+node_modules/
+.pnpm-store/
+
+# build outputs
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+
+# env / secrets — NEVER commit
+.env
+.env.*
+!.env.example
+.dev.vars
+.wrangler/
+
+# editor / OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# cloudflare local state
+.mf/
+.miniflare/
+
+# coverage / test
+coverage/
+
+# claude worktrees (managed by harness)
+.claude/worktrees/

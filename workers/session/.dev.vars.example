@@ -1,0 +1,3 @@
+# Local development secrets for the session worker. Copy to .dev.vars (gitignored).
+# Wrangler exposes these as env vars in dev. None required yet — file exists so the
+# workflow is documented for future secrets (e.g. abuse-prevention tokens).

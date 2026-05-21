@@ -1,0 +1,22 @@
+name: User feedback
+description: A bug report or feature request from the app's in-app feedback widget or a user
+title: "[feedback] "
+labels: [feedback]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened or what would you like to see?
+      placeholder: "Describe the issue or idea in one or two sentences."
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: Where in the app?
+      placeholder: "Screen, button, or feature name. (Auto-filled by in-app widget when used.)"
+  - type: input
+    id: device
+    attributes:
+      label: Device / browser
+      placeholder: "Auto-filled by in-app widget. Leave blank if filed manually."

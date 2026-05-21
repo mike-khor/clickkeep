@@ -1,0 +1,50 @@
+# Feedback → PR pipeline.
+#
+# Triggered when:
+#   - An issue is labeled `feedback`
+#   - A comment on a feedback issue contains `/agent`
+#
+# Sends the issue body to Claude (via the official action), which opens a PR.
+# The tier-gate workflow then handles approval/merge.
+#
+# Setup required (one-time, by owner):
+#   - Repo secret: ANTHROPIC_API_KEY  (or use OAuth via the action's setup)
+#   - Issue label: feedback
+#   - Issue label: approved-tier-3   (used by tier-gate)
+#
+# This file is intentionally minimal: the real safety policy is in tier-gate.yml.
+
+name: Feedback to PR
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  dispatch:
+    if: |
+      (github.event.action == 'labeled' && github.event.label.name == 'feedback') ||
+      (github.event.action == 'created' &&
+       contains(github.event.comment.body, '/agent') &&
+       github.event.comment.author_association == 'OWNER')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are responding to user feedback filed as a GitHub issue. Read the issue body and any comments.
+            Make the smallest, most surgical change that addresses the feedback. Follow CLAUDE.md.
+            If the change would touch any Tier 3 path (see CLAUDE.md), STOP and post a comment on the issue
+            explaining what would need to change and why you can't proceed autonomously.
+            Otherwise, open a PR with a clear title and description that references this issue.
