@@ -32,7 +32,9 @@ jobs:
   dispatch:
     if: |
       (github.event.action == 'labeled' && github.event.label.name == 'feedback') ||
-      (github.event.action == 'created' && contains(github.event.comment.body, '/agent'))
+      (github.event.action == 'created' &&
+       contains(github.event.comment.body, '/agent') &&
+       github.event.comment.author_association == 'OWNER')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

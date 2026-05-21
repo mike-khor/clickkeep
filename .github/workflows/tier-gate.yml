@@ -53,17 +53,60 @@ jobs:
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check package.json dependencies/scripts changes
+        id: pkgcheck
+        run: |
+          BASE_REF="origin/${{ github.base_ref }}"
+          PKG_FILES=$(git diff --name-only "$BASE_REF"...HEAD | grep -E '(^|/)package\.json$' || true)
+          if [ -z "$PKG_FILES" ]; then
+            echo "tier3=false" >> "$GITHUB_OUTPUT"
+            echo "reason=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          REASON=""
+          for f in $PKG_FILES; do
+            BASE_CONTENT=$(git show "$BASE_REF:$f" 2>/dev/null || echo "")
+            HEAD_CONTENT=$(git show "HEAD:$f" 2>/dev/null || echo "")
+            if [ -z "$BASE_CONTENT" ] || [ -z "$HEAD_CONTENT" ]; then
+              REASON="$f added or removed"
+              break
+            fi
+            BASE_DEPS=$(echo "$BASE_CONTENT" | jq -cS '.dependencies // {}')
+            HEAD_DEPS=$(echo "$HEAD_CONTENT" | jq -cS '.dependencies // {}')
+            if [ "$BASE_DEPS" != "$HEAD_DEPS" ]; then
+              REASON="$f dependencies changed"
+              break
+            fi
+            BASE_SCRIPTS=$(echo "$BASE_CONTENT" | jq -cS '.scripts // {}')
+            HEAD_SCRIPTS=$(echo "$HEAD_CONTENT" | jq -cS '.scripts // {}')
+            if [ "$BASE_SCRIPTS" != "$HEAD_SCRIPTS" ]; then
+              REASON="$f scripts changed"
+              break
+            fi
+          done
+          if [ -n "$REASON" ]; then
+            echo "tier3=true" >> "$GITHUB_OUTPUT"
+            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          else
+            echo "tier3=false" >> "$GITHUB_OUTPUT"
+            echo "reason=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Classify tier
         id: tier
         env:
           FILES: ${{ steps.files.outputs.files }}
           GUARDRAIL: ${{ steps.guardrail.outputs.found }}
+          PKG_TIER3: ${{ steps.pkgcheck.outputs.tier3 }}
+          PKG_REASON: ${{ steps.pkgcheck.outputs.reason }}
         run: |
           python3 <<'PY'
           import os, re, sys
 
           files = [f for f in os.environ["FILES"].splitlines() if f.strip()]
           guardrail = os.environ["GUARDRAIL"] == "true"
+          pkg_tier3 = os.environ.get("PKG_TIER3") == "true"
+          pkg_reason = os.environ.get("PKG_REASON", "")
 
           tier3_patterns = [
               r"^packages/sync-core/",
@@ -98,6 +141,10 @@ jobs:
           if tier3_hits:
               tier = 3
               reason_parts.append(f"Tier-3 paths touched: {', '.join(tier3_hits[:5])}{'...' if len(tier3_hits) > 5 else ''}")
+
+          if pkg_tier3:
+              tier = 3
+              reason_parts.append(f"Tier-3 package.json change: {pkg_reason}")
 
           if tier != 3:
               # Tier 1 requires *every* file to match the tier-1 allowlist.
