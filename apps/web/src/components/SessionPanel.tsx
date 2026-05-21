@@ -22,6 +22,7 @@ export function SessionPanel(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [client, setClient] = useState<SessionClient | null>(null);
   const setSessionRole = useMetronome((s) => s.setSessionRole);
+  const sessionRole = useMetronome((s) => s.sessionRole);
 
   useEffect(() => {
     return () => {
@@ -125,7 +126,7 @@ export function SessionPanel(): JSX.Element {
         <div className="text-4xl font-bold tracking-[0.3em] tabular-nums">{code}</div>
         <div className="text-sm text-ink-500 dark:text-ink-400">
           {memberCount} {memberCount === 1 ? COPY.session.membersOne : COPY.session.membersMany}
-          {created ? ` • ${COPY.session.ownerBadge}` : ''}
+          {sessionRole === 'owner' ? ` • ${COPY.session.ownerBadge}` : ''}
         </div>
         <button
           type="button"
