@@ -7,6 +7,12 @@ const CREATE_BUTTON = 'Create session';
 const JOIN_BUTTON = 'Join session';
 const CODE_LABEL = 'Session code';
 
+// Member-count assertions need left-anchored word boundaries — otherwise
+// /2 members\b/ would also pass on "12 members" once future tests cross
+// 10+ clients in Concert Mode.
+const ONE_MEMBER = /\b1 member\b/;
+const TWO_MEMBERS = /\b2 members\b/;
+
 /** Returns the 4-character session code currently displayed on the page. */
 async function readCode(page: Page): Promise<string> {
   // The code is rendered in a big display div with tracking-[0.3em] tabular-nums.
@@ -29,7 +35,7 @@ test('creates a session and shows the join code', async ({ page }) => {
   expect(code).toMatch(CODE_REGEX);
 
   // Member count of 1 (singular form).
-  await expect(page.getByText(/1 member\b/)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(ONE_MEMBER)).toBeVisible({ timeout: 10_000 });
 });
 
 test('two clients in the same session see member-count 2', async ({ browser }) => {
@@ -49,8 +55,8 @@ test('two clients in the same session see member-count 2', async ({ browser }) =
     await pageB.getByRole('button', { name: JOIN_BUTTON }).click();
 
     // Both contexts should eventually show "2 members".
-    await expect(pageA.getByText(/2 members\b/)).toBeVisible({ timeout: 10_000 });
-    await expect(pageB.getByText(/2 members\b/)).toBeVisible({ timeout: 10_000 });
+    await expect(pageA.getByText(TWO_MEMBERS)).toBeVisible({ timeout: 10_000 });
+    await expect(pageB.getByText(TWO_MEMBERS)).toBeVisible({ timeout: 10_000 });
   } finally {
     await ctxA.close();
     await ctxB.close();
@@ -73,13 +79,13 @@ test('leaving the session drops the member count', async ({ browser }) => {
     await pageB.getByRole('button', { name: JOIN_BUTTON }).click();
 
     // Wait for the two-member state before tearing B down.
-    await expect(pageA.getByText(/2 members\b/)).toBeVisible({ timeout: 10_000 });
+    await expect(pageA.getByText(TWO_MEMBERS)).toBeVisible({ timeout: 10_000 });
 
     // Closing the page tears down B's WebSocket; DO should rebroadcast count=1.
     await pageB.close();
     await ctxB.close();
 
-    await expect(pageA.getByText(/1 member\b/)).toBeVisible({ timeout: 10_000 });
+    await expect(pageA.getByText(ONE_MEMBER)).toBeVisible({ timeout: 10_000 });
   } finally {
     await ctxA.close();
     // ctxB may already be closed; close() is idempotent enough but guard.
