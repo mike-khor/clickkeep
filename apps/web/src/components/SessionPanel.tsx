@@ -109,16 +109,20 @@ export function SessionPanel(): JSX.Element {
     didAutoConnectRef.current = true;
     const codeFromUrl = readCodeFromHash();
     if (codeFromUrl === null) return;
-    const secret = recallOwnerSecret(codeFromUrl);
+    const credential = recallOwnerSecret(codeFromUrl);
     setCode(codeFromUrl);
     autoConnectCodeRef.current = codeFromUrl;
-    if (secret !== null) {
-      // We have a secret stashed, so we *believe* we're the owner. Surface
+    if (credential !== null) {
+      // We have a credential stashed, so we *believe* we're the owner. Surface
       // that in the UI right away by setting `created` — the actual ownership
       // claim happens inside SessionClient.onOpen via claim-owner.
-      setCreated({ code: codeFromUrl, sessionId: '', ownerSecret: secret });
+      setCreated({
+        code: codeFromUrl,
+        sessionId: credential.sessionId,
+        ownerSecret: credential.secret,
+      });
     }
-    connect(codeFromUrl, secret);
+    connect(codeFromUrl, credential?.secret ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional mount-only
   }, []);
 
@@ -131,7 +135,7 @@ export function SessionPanel(): JSX.Element {
       setCreated(body);
       setCode(body.code);
       writeCodeToHash(body.code);
-      rememberOwnerSecret(body.code, body.ownerSecret);
+      rememberOwnerSecret(body.code, body.sessionId, body.ownerSecret);
       connect(body.code, body.ownerSecret);
     } catch (e) {
       setError(String(e));
