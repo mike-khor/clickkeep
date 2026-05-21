@@ -32,9 +32,10 @@ export function SessionPanel(): JSX.Element {
   const setSessionRole = useMetronome((s) => s.setSessionRole);
   const sessionRole = useMetronome((s) => s.sessionRole);
   // Tracks the code of the connection we *automatically* started from the URL
-  // on mount. If that connection errors out (e.g. 404 because the session
-  // expired) we want to clear the hash and show "Session expired" rather than
-  // silently leave a dead code in the address bar.
+  // on mount. Used to decide whether to drop a stale owner secret when the
+  // worker rejects the auto-rejoin's `claim-owner`. We deliberately do NOT
+  // clear the URL on every error: transient socket failures and `bad-secret`
+  // both still leave a live session the user can re-join as a member.
   const autoConnectCodeRef = useRef<string | null>(null);
   // StrictMode double-runs the mount effect; this guard makes sure we don't
   // open two WebSockets to the same session on the first render.
@@ -70,22 +71,27 @@ export function SessionPanel(): JSX.Element {
         setStatus('connected');
         setRttMs(Math.round(e.rttMs));
       },
-      onError: (_code, msg) => {
-        // If this failure was for the session we tried to auto-rejoin from
-        // the URL, the code in the URL is stale — wipe it and tell the user.
-        if (autoConnectCodeRef.current === codeToUse) {
-          clearHash();
+      onError: (errCode, msg) => {
+        // On `bad-secret` during auto-rejoin: the stored owner secret is stale
+        // (or never belonged to this session in the first place — codes can be
+        // recycled). Forget it so future reloads don't keep trying to claim
+        // owner, drop the optimistic "you are the owner" badge, and demote to
+        // member — the session itself is alive and we stay connected to it.
+        // For every other error (`socket` blips, `internal`, etc.) treat the
+        // failure as transient: surface the message but don't touch URL or
+        // storage, and fall back to solo since the connection itself is
+        // likely going down (onClose will fire shortly).
+        if (autoConnectCodeRef.current === codeToUse && errCode === 'bad-secret') {
           forgetOwnerSecret(codeToUse);
+          setCreated(null);
           autoConnectCodeRef.current = null;
-          setError('Session expired');
-          setCode('');
+          setError('Owner credentials no longer valid — joined as member.');
+          setSessionRole('member');
         } else {
           setError(msg);
+          setSessionRole('solo');
         }
         setStatus('error');
-        // A claim-owner failure or any other socket error means we can't
-        // trust the role we just optimistically set. Fall back to solo.
-        setSessionRole('solo');
       },
       onClose: () => {
         setStatus('idle');
