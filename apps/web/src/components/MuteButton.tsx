@@ -35,7 +35,30 @@ export function MuteButton(): JSX.Element {
           : 'bg-transparent text-ink-700 dark:text-ink-200 hover:bg-ink-100 dark:hover:bg-ink-800',
       ].join(' ')}
     >
-      <span aria-hidden="true">{muted ? '\u{1F507}' : '\u{1F50A}'}</span>
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 24 24"
+        width="20"
+        height="20"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M11 5 L6 9 H3 V15 H6 L11 19 Z" />
+        {muted ? (
+          <>
+            <line x1="16" y1="9" x2="22" y2="15" />
+            <line x1="22" y1="9" x2="16" y2="15" />
+          </>
+        ) : (
+          <>
+            <path d="M16 8 a5 5 0 0 1 0 8" />
+            <path d="M19 5 a9 9 0 0 1 0 14" />
+          </>
+        )}
+      </svg>
     </button>
   );
 }
