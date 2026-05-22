@@ -20,6 +20,13 @@ export const COPY = {
     hapticOn: 'Disable haptic',
     hapticOff: 'Enable haptic',
   },
+  tempoMap: {
+    load: 'Load MIDI',
+    clear: 'Clear tempo map',
+    loaded: 'Tempo map',
+    parseError: 'Could not read MIDI file.',
+    empty: 'No tempo changes found in this MIDI.',
+  },
   session: {
     create: 'Create session',
     join: 'Join session',

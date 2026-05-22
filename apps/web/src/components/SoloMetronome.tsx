@@ -6,6 +6,7 @@ import { COPY } from '../copy/strings.js';
 import { BeatIndicator } from './BeatIndicator.js';
 import { TapButton } from './TapButton.js';
 import { OutputToggles } from './OutputToggles.js';
+import { formatTimeSec, parseTempoMap } from '../lib/midi-tempo.js';
 
 // Must exceed the scheduler's lookahead (100ms) so a tempo change can never
 // race a beat that's already been queued for audio playback. 150ms gives a
@@ -25,13 +26,19 @@ export function SoloMetronome(): JSX.Element {
     isPlaying,
     currentBeat,
     sessionRole,
+    tempoMap,
+    tempoMapName,
     setBpm,
     setBeatsPerBar,
     setPlaying,
     setCurrentBeat,
+    setTempoMap,
+    clearTempoMap,
   } = useMetronome();
   const runningRef = useRef<RunningClick | null>(null);
   const anchorRef = useRef<Anchor | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [midiError, setMidiError] = useState<string | null>(null);
   // Read latest beatsPerBar inside the scheduler callback without rebinding it,
   // so signature changes also flow through without restarting the engine.
   const beatsPerBarRef = useRef(beatsPerBar);
@@ -80,6 +87,27 @@ export function SoloMetronome(): JSX.Element {
   const cancelBpmDraft = (): void => {
     setBpmDraft(null);
     bpmInputRef.current?.blur();
+  };
+
+  const handleMidiFile = async (file: File): Promise<void> => {
+    setMidiError(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const map = parseTempoMap(buf);
+      if (map.length === 0) {
+        setMidiError(COPY.tempoMap.empty);
+        return;
+      }
+      setTempoMap(map, file.name);
+    } catch {
+      setMidiError(COPY.tempoMap.parseError);
+    }
+  };
+
+  const handleClearTempoMap = (): void => {
+    setMidiError(null);
+    clearTempoMap();
+    if (fileInputRef.current !== null) fileInputRef.current.value = '';
   };
 
   // Start / stop the click engine on play toggle. We intentionally do NOT list
@@ -135,6 +163,31 @@ export function SoloMetronome(): JSX.Element {
     anchorRef.current = nextAnchor;
     runningRef.current = startScheduler(ctx, nextAnchor, setCurrentBeat, beatsPerBarRef, hapticEnabledRef);
   }, [bpm, beatsPerBar, isPlaying, setCurrentBeat]);
+
+  // When a tempo map is loaded and the user hits Play, schedule each upcoming
+  // BPM change. Each timer fires HANDOFF_LOOKAHEAD_MS before the target time
+  // so the existing handoff effect lands the new tempo on the right beat.
+  // We pump tempo changes through `setBpm`, which triggers the seamless
+  // handoff above. Stop or clear cancels every pending timer.
+  useEffect(() => {
+    if (!isPlaying || tempoMap === null || tempoMap.length === 0) return;
+    const startedAt = performance.now();
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    // The first entry is the starting BPM, already applied by setTempoMap.
+    // Skip any entry at timeSec <= 0 — those have already taken effect.
+    for (const change of tempoMap) {
+      const fireAt = startedAt + change.timeSec * 1000 - HANDOFF_LOOKAHEAD_MS;
+      const delay = fireAt - performance.now();
+      if (delay <= 0) continue;
+      const id = setTimeout(() => {
+        setBpm(change.bpm);
+      }, delay);
+      timers.push(id);
+    }
+    return () => {
+      for (const id of timers) clearTimeout(id);
+    };
+  }, [isPlaying, tempoMap, setBpm]);
 
   return (
     <div className="flex flex-col items-center gap-8">
@@ -208,6 +261,61 @@ export function SoloMetronome(): JSX.Element {
             ))}
           </select>
         </label>
+      </div>
+
+      <div className="flex w-full max-w-md flex-col items-stretch gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isMember}
+            className="rounded-md border border-ink-200 dark:border-ink-700 px-3 py-1.5 text-sm hover:bg-ink-100 dark:hover:bg-ink-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {COPY.tempoMap.load}
+          </button>
+          {tempoMap !== null && (
+            <button
+              type="button"
+              onClick={handleClearTempoMap}
+              disabled={isMember}
+              className="rounded-md border border-ink-200 dark:border-ink-700 px-3 py-1.5 text-sm hover:bg-ink-100 dark:hover:bg-ink-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {COPY.tempoMap.clear}
+            </button>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".mid,.midi,audio/midi,audio/x-midi"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file !== undefined) void handleMidiFile(file);
+            }}
+          />
+        </div>
+        {midiError !== null && (
+          <div className="text-sm text-red-600 dark:text-red-400">{midiError}</div>
+        )}
+        {tempoMap !== null && (
+          <div
+            className="rounded-md border border-ink-200 dark:border-ink-700 p-2 text-xs"
+            aria-label={COPY.tempoMap.loaded}
+          >
+            {tempoMapName !== null && (
+              <div className="mb-1 truncate font-medium text-ink-700 dark:text-ink-200">
+                {tempoMapName}
+              </div>
+            )}
+            <ol className="flex flex-wrap gap-x-3 gap-y-1 text-ink-500 dark:text-ink-400 tabular-nums">
+              {tempoMap.map((entry, i) => (
+                <li key={`${i}-${entry.timeSec}`} className="whitespace-nowrap">
+                  {formatTimeSec(entry.timeSec)} {String.fromCharCode(8594)} {entry.bpm.toFixed(1)} {COPY.solo.bpm}
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-6">

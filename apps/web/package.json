@@ -15,6 +15,7 @@
   "dependencies": {
     "@clickkeep/click-engine": "workspace:*",
     "@clickkeep/sync-core": "workspace:*",
+    "@tonejs/midi": "^2.0.28",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^5.0.1"
