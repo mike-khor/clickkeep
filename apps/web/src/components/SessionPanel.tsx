@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { SessionClient } from '../lib/session-client.js';
+import { useMetronome } from '../lib/store.js';
 import { COPY } from '../copy/strings.js';
 
 const WORKER_URL = (import.meta.env.VITE_SESSION_WORKER_URL as string | undefined) ?? 'http://localhost:8787';
@@ -20,6 +21,8 @@ export function SessionPanel(): JSX.Element {
   const [rttMs, setRttMs] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [client, setClient] = useState<SessionClient | null>(null);
+  const setSessionRole = useMetronome((s) => s.setSessionRole);
+  const sessionRole = useMetronome((s) => s.sessionRole);
 
   useEffect(() => {
     return () => {
@@ -27,8 +30,19 @@ export function SessionPanel(): JSX.Element {
     };
   }, [client]);
 
+  // Whenever the panel unmounts entirely (route change, app teardown), drop
+  // back to solo so a stale 'member' flag can't outlive the connection.
+  useEffect(() => {
+    return () => {
+      setSessionRole('solo');
+    };
+  }, [setSessionRole]);
+
   const connect = (codeToUse: string, ownerSecret: string | null): void => {
     setStatus('connecting');
+    // Optimistically reflect the intended role; the worker is the final word —
+    // if it rejects ownership (claim-owner failure) onError will flip us back.
+    setSessionRole(ownerSecret !== null ? 'owner' : 'member');
     const wsScheme = WORKER_URL.startsWith('https') ? 'wss' : 'ws';
     const wsUrl = `${WORKER_URL.replace(/^https?/, wsScheme)}/sessions/${codeToUse}/ws`;
     const c = new SessionClient(wsUrl, ownerSecret, {
@@ -43,8 +57,14 @@ export function SessionPanel(): JSX.Element {
       onError: (_code, msg) => {
         setError(msg);
         setStatus('error');
+        // A claim-owner failure or any other socket error means we can't
+        // trust the role we just optimistically set. Fall back to solo.
+        setSessionRole('solo');
       },
-      onClose: () => setStatus('idle'),
+      onClose: () => {
+        setStatus('idle');
+        setSessionRole('solo');
+      },
     });
     setClient(c);
   };
@@ -61,6 +81,7 @@ export function SessionPanel(): JSX.Element {
     } catch (e) {
       setError(String(e));
       setStatus('error');
+      setSessionRole('solo');
     }
   };
 
@@ -81,6 +102,7 @@ export function SessionPanel(): JSX.Element {
     setMemberCount(0);
     setRttMs(null);
     setStatus('idle');
+    setSessionRole('solo');
   };
 
   if (status === 'connected' || status === 'connecting') {
@@ -104,7 +126,7 @@ export function SessionPanel(): JSX.Element {
         <div className="text-4xl font-bold tracking-[0.3em] tabular-nums">{code}</div>
         <div className="text-sm text-ink-500 dark:text-ink-400">
           {memberCount} {memberCount === 1 ? COPY.session.membersOne : COPY.session.membersMany}
-          {created ? ' • you are the owner' : ''}
+          {sessionRole === 'owner' ? ` • ${COPY.session.ownerBadge}` : ''}
         </div>
         <button
           type="button"
