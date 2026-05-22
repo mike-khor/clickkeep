@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useMetronome } from './store.js';
 
 // Zustand stores are singletons. Reset to defaults before each test so
@@ -54,5 +54,61 @@ describe('output-mode toggles', () => {
     expect(s.muted).toBe(true);
     expect(s.visualEnabled).toBe(false);
     expect(s.hapticEnabled).toBe(false);
+  });
+});
+
+describe('output-mode toggle persistence', () => {
+  // Vitest runs in node (no jsdom), so localStorage is undefined by default.
+  // Stub it per-test so the setters' writeBool path actually executes.
+  let store: Record<string, string>;
+  beforeEach(() => {
+    store = {};
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (k in store ? store[k] : null),
+      setItem: (k: string, v: string) => {
+        store[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete store[k];
+      },
+      clear: () => {
+        store = {};
+      },
+      key: () => null,
+      length: 0,
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('toggleMuted persists to localStorage', () => {
+    useMetronome.getState().toggleMuted();
+    expect(store['clickkeep:muted']).toBe('1');
+    useMetronome.getState().toggleMuted();
+    expect(store['clickkeep:muted']).toBe('0');
+  });
+
+  it('toggleVisualEnabled persists to localStorage', () => {
+    useMetronome.getState().toggleVisualEnabled();
+    expect(store['clickkeep:visual-enabled']).toBe('0');
+    useMetronome.getState().toggleVisualEnabled();
+    expect(store['clickkeep:visual-enabled']).toBe('1');
+  });
+
+  it('toggleHapticEnabled persists to localStorage', () => {
+    useMetronome.getState().toggleHapticEnabled();
+    expect(store['clickkeep:haptic-enabled']).toBe('0');
+    useMetronome.getState().toggleHapticEnabled();
+    expect(store['clickkeep:haptic-enabled']).toBe('1');
+  });
+
+  it('explicit setters also persist', () => {
+    useMetronome.getState().setMuted(true);
+    useMetronome.getState().setVisualEnabled(false);
+    useMetronome.getState().setHapticEnabled(false);
+    expect(store['clickkeep:muted']).toBe('1');
+    expect(store['clickkeep:visual-enabled']).toBe('0');
+    expect(store['clickkeep:haptic-enabled']).toBe('0');
   });
 });
