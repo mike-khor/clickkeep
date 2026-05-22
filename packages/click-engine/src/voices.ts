@@ -70,7 +70,7 @@ export const woodblockVoice: Voice = ({ audioCtx, atTime, state }) => {
   bp.Q.value = 8;
   const gain = audioCtx.createGain();
   gain.gain.setValueAtTime(0, atTime);
-  gain.gain.linearRampToValueAtTime(isAccent ? 0.6 : 0.4, atTime + 0.001);
+  gain.gain.linearRampToValueAtTime(isAccent ? 1.0 : 0.8, atTime + 0.001);
   gain.gain.exponentialRampToValueAtTime(0.0001, atTime + 0.05);
   src.connect(bp).connect(gain).connect(audioCtx.destination);
   src.start(atTime);
@@ -87,7 +87,7 @@ export const snapVoice: Voice = ({ audioCtx, atTime, state }) => {
   bp.Q.value = 4;
   const gain = audioCtx.createGain();
   gain.gain.setValueAtTime(0, atTime);
-  gain.gain.linearRampToValueAtTime(isAccent ? 0.5 : 0.32, atTime + 0.0005);
+  gain.gain.linearRampToValueAtTime(isAccent ? 0.95 : 0.7, atTime + 0.0005);
   gain.gain.exponentialRampToValueAtTime(0.0001, atTime + 0.03);
   src.connect(bp).connect(gain).connect(audioCtx.destination);
   src.start(atTime);
