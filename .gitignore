@@ -34,6 +34,9 @@ yarn-debug.log*
 
 # coverage / test
 coverage/
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/.playwright/
 
 # claude worktrees (managed by harness)
 .claude/worktrees/
