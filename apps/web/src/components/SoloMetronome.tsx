@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { startClick, type RunningClick, pulse } from '@clickkeep/click-engine';
 import { useMetronome } from '../lib/store.js';
 import { getAudioContext } from '../lib/audio.js';
@@ -27,6 +27,33 @@ export function SoloMetronome(): JSX.Element {
   // so signature changes also flow through without restarting the engine.
   const beatsPerBarRef = useRef(beatsPerBar);
   beatsPerBarRef.current = beatsPerBar;
+
+  // Local editing buffer for the typed BPM input. We keep a string so users can
+  // freely type "12", "120.", "120.5", etc. without us snapping mid-keystroke.
+  // `null` means "not editing — render bpm.toFixed(1)".
+  const [bpmDraft, setBpmDraft] = useState<string | null>(null);
+  const bpmInputRef = useRef<HTMLInputElement | null>(null);
+
+  const commitBpmDraft = (): void => {
+    if (bpmDraft === null) return;
+    const trimmed = bpmDraft.trim();
+    if (trimmed === '') {
+      // Empty input reverts to the last valid value.
+      setBpmDraft(null);
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) {
+      // store.setBpm clamps to [30, 300].
+      setBpm(parsed);
+    }
+    setBpmDraft(null);
+  };
+
+  const cancelBpmDraft = (): void => {
+    setBpmDraft(null);
+    bpmInputRef.current?.blur();
+  };
 
   // Start / stop the click engine on play toggle. We intentionally do NOT list
   // bpm or beatsPerBar in this effect's deps: rapid slider input would tear
@@ -87,7 +114,42 @@ export function SoloMetronome(): JSX.Element {
       <BeatIndicator beat={currentBeat} beatsPerBar={beatsPerBar} isPlaying={isPlaying} />
 
       <div className="flex flex-col items-center gap-2">
-        <div className="text-6xl font-bold tabular-nums tracking-tight">{bpm}</div>
+        <input
+          ref={bpmInputRef}
+          type="number"
+          inputMode="decimal"
+          step="0.1"
+          min={30}
+          max={300}
+          // 7ch fits "300.0" with room to breathe; tabular-nums keeps every digit
+          // the same width so toggling between view and edit modes doesn't shift layout.
+          className={[
+            'w-[7ch] bg-transparent text-center text-6xl font-bold tabular-nums tracking-tight',
+            'cursor-text rounded-md border-none outline-none',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
+            'appearance-none [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]',
+          ].join(' ')}
+          value={bpmDraft ?? bpm.toFixed(1)}
+          onFocus={(e) => {
+            setBpmDraft(bpm.toFixed(1));
+            // Select on focus so a click-and-type replaces the value, matching
+            // user expectation for "click number → type new tempo".
+            e.currentTarget.select();
+          }}
+          onChange={(e) => setBpmDraft(e.target.value)}
+          onBlur={commitBpmDraft}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commitBpmDraft();
+              bpmInputRef.current?.blur();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              cancelBpmDraft();
+            }
+          }}
+          aria-label={COPY.solo.bpm}
+        />
         <div className="text-sm uppercase tracking-widest text-ink-500 dark:text-ink-400">{COPY.solo.bpm}</div>
       </div>
 
@@ -95,6 +157,7 @@ export function SoloMetronome(): JSX.Element {
         type="range"
         min={30}
         max={300}
+        step={1}
         value={bpm}
         onChange={(e) => setBpm(Number(e.target.value))}
         className="w-full max-w-md accent-accent"
