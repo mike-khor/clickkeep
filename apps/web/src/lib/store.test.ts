@@ -4,6 +4,11 @@ import { useMetronome } from './store.js';
 // Zustand stores are singletons. Reset to defaults before each test so
 // assertions don't leak between cases. Using setState (not mocking) per
 // the grug rule: avoid mocking except at coarse-grained boundaries.
+//
+// IMPORTANT: keep this as raw setState — do NOT switch to setMuted /
+// setVisualEnabled / setHapticEnabled. The action setters now write to
+// localStorage, so calling them in beforeEach would silently overwrite
+// what each persistence test is trying to assert.
 beforeEach(() => {
   useMetronome.setState({
     bpm: 120,
