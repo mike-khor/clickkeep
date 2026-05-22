@@ -13,8 +13,9 @@ import { COPY } from '../copy/strings.js';
 import { BeatIndicator } from './BeatIndicator.js';
 import { TapButton } from './TapButton.js';
 import { OutputToggles } from './OutputToggles.js';
+import { PlayCircle } from './PlayCircle.js';
+import { MidiSheet } from './MidiSheet.js';
 import { ToneProfileSelector } from './ToneProfileSelector.js';
-import { formatTimeSec, parseTempoMap } from '../lib/midi-tempo.js';
 
 // Must exceed the scheduler's lookahead (100ms) so a tempo change can never
 // race a beat that's already been queued for audio playback. 150ms gives a
@@ -35,18 +36,13 @@ export function SoloMetronome(): JSX.Element {
     currentBeat,
     sessionRole,
     tempoMap,
-    tempoMapName,
     setBpm,
     setBeatsPerBar,
     setPlaying,
     setCurrentBeat,
-    setTempoMap,
-    clearTempoMap,
   } = useMetronome();
   const runningRef = useRef<RunningClick | null>(null);
   const anchorRef = useRef<Anchor | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [midiError, setMidiError] = useState<string | null>(null);
   // Read latest beatsPerBar inside the scheduler callback without rebinding it,
   // so signature changes also flow through without restarting the engine.
   const beatsPerBarRef = useRef(beatsPerBar);
@@ -99,26 +95,34 @@ export function SoloMetronome(): JSX.Element {
     bpmInputRef.current?.blur();
   };
 
-  const handleMidiFile = async (file: File): Promise<void> => {
-    setMidiError(null);
-    try {
-      const buf = await file.arrayBuffer();
-      const map = parseTempoMap(buf);
-      if (map.length === 0) {
-        setMidiError(COPY.tempoMap.empty);
+  // Spacebar toggles play/pause unless the user is editing text or holding
+  // modifiers (so we don't fight browser shortcuts or eat a literal space in
+  // the BPM input). Members can't toggle; let Space scroll the page as usual.
+  useEffect(() => {
+    if (isMember) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.code !== 'Space') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName ?? '';
+      // Don't hijack Space when the user is interacting with a form control or
+      // a focusable button — let the browser deliver the default action so
+      // tap/leave/etc. still work via keyboard.
+      if (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        tag === 'BUTTON' ||
+        target?.isContentEditable === true
+      ) {
         return;
       }
-      setTempoMap(map, file.name);
-    } catch {
-      setMidiError(COPY.tempoMap.parseError);
-    }
-  };
-
-  const handleClearTempoMap = (): void => {
-    setMidiError(null);
-    clearTempoMap();
-    if (fileInputRef.current !== null) fileInputRef.current.value = '';
-  };
+      e.preventDefault();
+      setPlaying(!isPlaying);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isPlaying, isMember, setPlaying]);
 
   // Start / stop the click engine on play toggle. We intentionally do NOT list
   // bpm or beatsPerBar in this effect's deps: rapid slider input would tear
@@ -226,10 +230,28 @@ export function SoloMetronome(): JSX.Element {
   }, [isPlaying, tempoMap, setBpm]);
 
   return (
-    <div className="flex flex-col items-center gap-8">
-      <BeatIndicator beat={currentBeat} beatsPerBar={beatsPerBar} isPlaying={isPlaying} />
+    <div className="flex w-full max-w-xl flex-col items-center gap-3 sm:gap-5">
+      {/* Hero: tap circle to play/pause. Dots row sits directly under it. */}
+      <PlayCircle
+        beat={currentBeat}
+        beatsPerBar={beatsPerBar}
+        isPlaying={isPlaying}
+        disabled={isMember}
+        onToggle={() => setPlaying(!isPlaying)}
+      />
+      {/* BeatIndicator renders the clickable dot row (accent/normal/mute cycle)
+          and the hero flash circle. We hide the flash circle here because
+          PlayCircle provides the primary play indicator. The dots remain
+          interactive — clicking cycles each beat through its three states. */}
+      <div className="[&>div]:gap-0 [&>div>div:first-child]:hidden">
+        <BeatIndicator beat={currentBeat} beatsPerBar={beatsPerBar} isPlaying={isPlaying} />
+      </div>
 
-      <div className="flex flex-col items-center gap-2">
+      {/* Tempo: large editable number + slider underneath. */}
+      <div className="flex w-full flex-col items-center gap-1">
+        <div className="text-[10px] uppercase tracking-widest text-ink-500 dark:text-ink-400">
+          {COPY.solo.bpm}
+        </div>
         <input
           ref={bpmInputRef}
           type="number"
@@ -237,13 +259,15 @@ export function SoloMetronome(): JSX.Element {
           step="0.1"
           min={30}
           max={300}
+          disabled={isMember}
           // 7ch fits "300.0" with room to breathe; tabular-nums keeps every digit
           // the same width so toggling between view and edit modes doesn't shift layout.
           className={[
-            'w-[7ch] bg-transparent text-center text-6xl font-bold tabular-nums tracking-tight',
+            'w-[7ch] bg-transparent text-center text-5xl sm:text-6xl font-bold tabular-nums tracking-tight',
             'cursor-text rounded-md border-none outline-none',
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
             'appearance-none [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]',
+            'disabled:opacity-60 disabled:cursor-not-allowed',
           ].join(' ')}
           value={bpmDraft ?? bpm.toFixed(1)}
           onFocus={(e) => {
@@ -266,29 +290,35 @@ export function SoloMetronome(): JSX.Element {
           }}
           aria-label={COPY.solo.bpm}
         />
-        <div className="text-sm uppercase tracking-widest text-ink-500 dark:text-ink-400">{COPY.solo.bpm}</div>
+        <input
+          type="range"
+          min={30}
+          max={300}
+          step={1}
+          value={bpm}
+          onChange={(e) => setBpm(Number(e.target.value))}
+          disabled={isMember}
+          className="w-full max-w-sm accent-accent disabled:opacity-50 disabled:cursor-not-allowed"
+          aria-label={COPY.solo.bpm}
+        />
       </div>
 
-      <input
-        type="range"
-        min={30}
-        max={300}
-        step={1}
-        value={bpm}
-        onChange={(e) => setBpm(Number(e.target.value))}
-        disabled={isMember}
-        className="w-full max-w-md accent-accent disabled:opacity-50 disabled:cursor-not-allowed"
-        aria-label={COPY.solo.bpm}
-      />
-
-      <div className="flex flex-wrap items-center justify-center gap-4">
-        <label className={['flex items-center gap-2 text-sm', isMember ? 'opacity-50' : ''].join(' ')}>
+      {/* Toolbar: secondary controls in one row. */}
+      <div className="flex w-full flex-wrap items-center justify-center gap-2 sm:gap-3">
+        <TapButton onBpm={setBpm} disabled={isMember} />
+        <label
+          className={[
+            'inline-flex items-center gap-2 rounded-full border border-ink-200 dark:border-ink-700 px-3 py-2 text-sm',
+            isMember ? 'opacity-50' : '',
+          ].join(' ')}
+        >
           <span className="text-ink-500 dark:text-ink-400">{COPY.solo.beatsPerBar}</span>
           <select
             value={beatsPerBar}
             onChange={(e) => setBeatsPerBar(Number(e.target.value))}
             disabled={isMember}
-            className="rounded-md border border-ink-200 dark:border-ink-700 bg-transparent px-2 py-1 disabled:cursor-not-allowed"
+            className="bg-transparent font-semibold tabular-nums disabled:cursor-not-allowed focus:outline-none"
+            aria-label={COPY.solo.beatsPerBar}
           >
             {[2, 3, 4, 5, 6, 7, 8].map((n) => (
               <option key={n} value={n}>
@@ -298,88 +328,12 @@ export function SoloMetronome(): JSX.Element {
           </select>
         </label>
         <ToneProfileSelector disabled={isMember} />
-      </div>
-
-      <div className="flex w-full max-w-md flex-col items-stretch gap-2">
-        <div className="flex items-center justify-between gap-2">
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isMember}
-            className="rounded-md border border-ink-200 dark:border-ink-700 px-3 py-1.5 text-sm hover:bg-ink-100 dark:hover:bg-ink-800 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {COPY.tempoMap.load}
-          </button>
-          {tempoMap !== null && (
-            <button
-              type="button"
-              onClick={handleClearTempoMap}
-              disabled={isMember}
-              className="rounded-md border border-ink-200 dark:border-ink-700 px-3 py-1.5 text-sm hover:bg-ink-100 dark:hover:bg-ink-800 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {COPY.tempoMap.clear}
-            </button>
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".mid,.midi,audio/midi,audio/x-midi"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file !== undefined) void handleMidiFile(file);
-            }}
-          />
-        </div>
-        {midiError !== null && (
-          <div className="text-sm text-red-600 dark:text-red-400">{midiError}</div>
-        )}
-        {tempoMap !== null && (
-          <div
-            className="rounded-md border border-ink-200 dark:border-ink-700 p-2 text-xs"
-            aria-label={COPY.tempoMap.loaded}
-          >
-            {tempoMapName !== null && (
-              <div className="mb-1 truncate font-medium text-ink-700 dark:text-ink-200">
-                {tempoMapName}
-              </div>
-            )}
-            <ol className="flex flex-wrap gap-x-3 gap-y-1 text-ink-500 dark:text-ink-400 tabular-nums">
-              {tempoMap.map((entry, i) => (
-                <li key={`${i}-${entry.timeSec}`} className="whitespace-nowrap">
-                  {formatTimeSec(entry.timeSec)} {String.fromCharCode(8594)} {entry.bpm.toFixed(1)} {COPY.solo.bpm}
-                </li>
-              ))}
-            </ol>
-          </div>
-        )}
-      </div>
-
-      <div className="flex items-center gap-6">
-        <TapButton onBpm={setBpm} disabled={isMember} />
-        <button
-          type="button"
-          onClick={() => setPlaying(!isPlaying)}
-          disabled={isMember}
-          className={[
-            'h-20 rounded-full px-10 text-lg font-semibold',
-            'transition-transform active:scale-95',
-            'disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100',
-            isPlaying
-              ? 'bg-ink-800 dark:bg-ink-100 text-ink-50 dark:text-ink-900'
-              : 'bg-accent text-ink-900 hover:bg-accent-600 disabled:hover:bg-accent',
-          ].join(' ')}
-        >
-          {isPlaying ? COPY.solo.stop : COPY.solo.play}
-        </button>
         <OutputToggles />
+        <MidiSheet disabled={isMember} />
       </div>
 
       {isMember && (
-        <div
-          role="status"
-          className="text-sm text-ink-500 dark:text-ink-400"
-        >
+        <div role="status" className="text-xs text-ink-500 dark:text-ink-400">
           {COPY.session.memberHint}
         </div>
       )}
