@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 340" role="img" aria-label="Three devices clicking in sync with a Cloudflare Durable Object as the shared time anchor">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fff7ed"/>
+      <stop offset="100%" stop-color="#ffedd5"/>
+    </linearGradient>
+    <radialGradient id="pulse" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#f97316" stop-opacity="0.65"/>
+      <stop offset="55%" stop-color="#f97316" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#f97316" stop-opacity="0.0"/>
+    </radialGradient>
+    <style>
+      .device { fill: #ffffff; stroke: #f97316; stroke-width: 2.5; }
+      .screen { fill: #fff7ed; stroke: #fdba74; stroke-width: 1.5; }
+      .flash  { fill: #f97316; }
+      .dotOn  { fill: #f97316; }
+      .dotOff { fill: #fdba74; }
+      .anchor { fill: #f97316; }
+      .anchorRing { fill: none; stroke: #f97316; stroke-width: 2; }
+      .label  { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+                font-weight: 600; fill: #1f2937; }
+      .sub    { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+                font-weight: 500; fill: #475569; font-size: 12px; }
+      .bpm    { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; fill: #9a3412; }
+      .wire   { stroke: #f97316; stroke-width: 2; stroke-dasharray: 5 5; fill: none; opacity: 0.8;
+                stroke-linecap: round; }
+    </style>
+  </defs>
+
+  <rect width="800" height="340" rx="18" fill="url(#bg)"/>
+
+  <!-- Dashed sync wires (drawn before devices/anchor so they sit underneath) -->
+  <path class="wire" d="M 210 200 Q 305 150 360 180"/>
+  <path class="wire" d="M 400 100 L 400 138"/>
+  <path class="wire" d="M 590 200 Q 495 150 440 180"/>
+
+  <!-- Central anchor: Durable Object -->
+  <g transform="translate(400,180)">
+    <circle r="80" fill="url(#pulse)"/>
+    <circle class="anchorRing" r="50"/>
+    <circle class="anchorRing" r="36" opacity="0.6"/>
+    <circle class="anchor" r="22"/>
+    <text class="label" text-anchor="middle" y="74"  font-size="14">Durable Object</text>
+    <text class="sub"   text-anchor="middle" y="92">shared time anchor</text>
+  </g>
+
+  <!-- Device: phone (left) -->
+  <g transform="translate(110,140)">
+    <rect class="device" x="0" y="0" width="100" height="180" rx="16"/>
+    <rect class="screen" x="10" y="14" width="80" height="152" rx="8"/>
+    <!-- big beat flash -->
+    <circle class="flash" cx="50" cy="62" r="22"/>
+    <!-- position dots -->
+    <g transform="translate(50,108)">
+      <circle class="dotOn"  cx="-18" cy="0" r="3.5"/>
+      <circle class="dotOff" cx="-6"  cy="0" r="3.5"/>
+      <circle class="dotOff" cx="6"   cy="0" r="3.5"/>
+      <circle class="dotOff" cx="18"  cy="0" r="3.5"/>
+    </g>
+    <!-- BPM readout -->
+    <text class="bpm" text-anchor="middle" x="50" y="140">120 BPM</text>
+    <text class="bpm" text-anchor="middle" x="50" y="156" fill="#c2410c" font-weight="700">▶ play</text>
+  </g>
+
+  <!-- Device: tablet (top center) -->
+  <g transform="translate(335,30)">
+    <rect class="device" x="0" y="0" width="130" height="90" rx="12"/>
+    <rect class="screen" x="9"  y="9"  width="112" height="72" rx="6"/>
+    <!-- beat flash -->
+    <circle class="flash" cx="65" cy="38" r="14"/>
+    <!-- position dots safely inside the screen -->
+    <g transform="translate(65,68)">
+      <circle class="dotOn"  cx="-18" cy="0" r="2.5"/>
+      <circle class="dotOff" cx="-6"  cy="0" r="2.5"/>
+      <circle class="dotOff" cx="6"   cy="0" r="2.5"/>
+      <circle class="dotOff" cx="18"  cy="0" r="2.5"/>
+    </g>
+  </g>
+
+  <!-- Device: laptop (right) -->
+  <g transform="translate(575,150)">
+    <rect class="device" x="0" y="0" width="170" height="110" rx="10"/>
+    <rect class="screen" x="10" y="10" width="150" height="84" rx="6"/>
+    <rect class="device" x="-14" y="110" width="198" height="10" rx="3"/>
+    <circle class="flash" cx="85" cy="44" r="18"/>
+    <g transform="translate(85,80)">
+      <circle class="dotOn"  cx="-22" cy="0" r="3"/>
+      <circle class="dotOff" cx="-7"  cy="0" r="3"/>
+      <circle class="dotOff" cx="7"   cy="0" r="3"/>
+      <circle class="dotOff" cx="22"  cy="0" r="3"/>
+    </g>
+  </g>
+
+  <!-- Caption -->
+  <text class="label" x="400" y="320" text-anchor="middle" font-size="15">
+    One session code · every device clicks together
+  </text>
+</svg>
