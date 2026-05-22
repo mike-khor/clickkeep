@@ -19,6 +19,8 @@ beforeEach(() => {
     visualEnabled: true,
     hapticEnabled: true,
     sessionRole: 'solo',
+    toneProfile: 'pitched',
+    accentPattern: ['accent', 'normal', 'normal', 'normal'],
   });
 });
 
@@ -115,5 +117,54 @@ describe('output-mode toggle persistence', () => {
     expect(store['clickkeep:muted']).toBe('1');
     expect(store['clickkeep:visual-enabled']).toBe('0');
     expect(store['clickkeep:haptic-enabled']).toBe('0');
+  });
+});
+
+describe('tone profile + accent pattern', () => {
+  it('defaults to the pitched profile and an accent-on-beat-1 pattern', () => {
+    const s = useMetronome.getState();
+    expect(s.toneProfile).toBe('pitched');
+    expect(s.accentPattern).toEqual(['accent', 'normal', 'normal', 'normal']);
+  });
+
+  it('setToneProfile updates the active profile', () => {
+    useMetronome.getState().setToneProfile('woodblock');
+    expect(useMetronome.getState().toneProfile).toBe('woodblock');
+  });
+
+  it('cycleBeatState cycles accent -> normal -> mute -> accent', () => {
+    const cycle = (): string | undefined => useMetronome.getState().accentPattern[0];
+    expect(cycle()).toBe('accent');
+    useMetronome.getState().cycleBeatState(0);
+    expect(cycle()).toBe('normal');
+    useMetronome.getState().cycleBeatState(0);
+    expect(cycle()).toBe('mute');
+    useMetronome.getState().cycleBeatState(0);
+    expect(cycle()).toBe('accent');
+  });
+
+  it('cycleBeatState ignores out-of-range indexes', () => {
+    const before = useMetronome.getState().accentPattern;
+    useMetronome.getState().cycleBeatState(-1);
+    useMetronome.getState().cycleBeatState(99);
+    expect(useMetronome.getState().accentPattern).toEqual(before);
+  });
+
+  it('setBeatsPerBar extends the pattern with normal beats', () => {
+    useMetronome.getState().setBeatsPerBar(6);
+    expect(useMetronome.getState().beatsPerBar).toBe(6);
+    expect(useMetronome.getState().accentPattern).toEqual([
+      'accent', 'normal', 'normal', 'normal', 'normal', 'normal',
+    ]);
+  });
+
+  it('setBeatsPerBar truncates the pattern while preserving leading entries', () => {
+    useMetronome.setState({
+      beatsPerBar: 4,
+      accentPattern: ['accent', 'mute', 'normal', 'accent'],
+    });
+    useMetronome.getState().setBeatsPerBar(2);
+    expect(useMetronome.getState().beatsPerBar).toBe(2);
+    expect(useMetronome.getState().accentPattern).toEqual(['accent', 'mute']);
   });
 });

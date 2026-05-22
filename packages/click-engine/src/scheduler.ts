@@ -3,6 +3,7 @@
 // "A Tale of Two Clocks" if you need to refresh the lookahead pattern.
 
 import { beatAtServerTime, isAccentBeat, serverTimeForBeat, type TempoSegment } from '@clickkeep/sync-core';
+import { getVoice, pitchedVoice, type BeatState, type ToneProfile, type Voice } from './voices.js';
 
 export interface SchedulerOptions {
   /** How far ahead (sec) to schedule audio events. Bigger = safer; smaller = lower latency. */
@@ -15,6 +16,20 @@ export interface SchedulerOptions {
   audioCtx: AudioContext;
   /** Called by the scheduler when each beat is scheduled, for visual / haptic side effects. */
   onBeatScheduled: (beat: number, audioTime: number) => void;
+  /**
+   * Click tone. Either a profile id (resolved once on start) or a Voice
+   * function. Pass a closure (e.g. `(args) => getVoice(ref.current)(args)`)
+   * to switch profiles live without restarting the engine. Defaults to 'pitched'.
+   */
+  voice?: ToneProfile | Voice;
+  /**
+   * Per-beat state callback. Lets the caller mute / accent specific beats
+   * on top of the tempo map's natural downbeat accent. When omitted, beats
+   * are 'accent' on segment downbeats and 'normal' elsewhere. Beats with
+   * state 'mute' skip audio output entirely, but onBeatScheduled still
+   * fires so the visual / haptic side effects continue.
+   */
+  beatStateFor?: (beat: number) => BeatState;
 }
 
 export interface RunningClick {
@@ -43,6 +58,9 @@ export function startClick(tempo: TempoSegment[], opts: SchedulerOptions): Runni
   const lookaheadSec = opts.lookaheadSec ?? DEFAULTS.lookaheadSec;
   const intervalMs = opts.scheduleIntervalMs ?? DEFAULTS.scheduleIntervalMs;
   const { audioCtx, nowServerMs, onBeatScheduled } = opts;
+  const voice = resolveVoice(opts.voice);
+  const beatStateFor =
+    opts.beatStateFor ?? ((beat: number): BeatState => (isAccentBeat(tempo, beat) ? 'accent' : 'normal'));
 
   // Where to start: ceiling of current beat (don't fire a beat we've already passed).
   const startBeat = Math.ceil(beatAtServerTime(tempo, nowServerMs()).beat);
@@ -65,13 +83,11 @@ export function startClick(tempo: TempoSegment[], opts: SchedulerOptions): Runni
       // Their delta gives us audioCtx time for the beat.
       const audioTimeForBeat = audioCtx.currentTime + (beatServerTime - serverNow) / 1000;
       if (audioTimeForBeat >= audioCtx.currentTime) {
-        // Accent on the downbeat of whichever tempo segment this beat lives in.
-        // Counting from the start of the current segment keeps the audio accent
-        // aligned with the user-selected beatsPerBar (the visual flash in
-        // BeatIndicator does the equivalent via React state). Previously this
-        // was hardcoded to `nextBeat % 4 === 0`, which drifted out of sync
-        // whenever beatsPerBar was anything other than 4.
-        playClick(audioCtx, audioTimeForBeat, isAccentBeat(tempo, nextBeat));
+        const state = beatStateFor(nextBeat);
+        // Mute = no audio, but visual + haptic still fire via onBeatScheduled.
+        if (state !== 'mute') {
+          voice({ audioCtx, atTime: audioTimeForBeat, state });
+        }
         onBeatScheduled(nextBeat, audioTimeForBeat);
       }
       nextBeat += 1;
@@ -91,20 +107,8 @@ export function startClick(tempo: TempoSegment[], opts: SchedulerOptions): Runni
   };
 }
 
-/**
- * Single click sound. Short tone, distinct accent on downbeats.
- * Synthesized so we have zero asset load and consistent latency.
- */
-function playClick(ctx: AudioContext, atTime: number, isAccent: boolean): void {
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.type = 'square';
-  osc.frequency.value = isAccent ? 1500 : 1000;
-  // Short envelope: ramp up in 1ms, decay over 60ms. Avoids click-pop.
-  gain.gain.setValueAtTime(0, atTime);
-  gain.gain.linearRampToValueAtTime(isAccent ? 0.35 : 0.22, atTime + 0.001);
-  gain.gain.exponentialRampToValueAtTime(0.0001, atTime + 0.06);
-  osc.connect(gain).connect(ctx.destination);
-  osc.start(atTime);
-  osc.stop(atTime + 0.07);
+function resolveVoice(voice: SchedulerOptions['voice']): Voice {
+  if (voice === undefined) return pitchedVoice;
+  if (typeof voice === 'function') return voice;
+  return getVoice(voice);
 }
