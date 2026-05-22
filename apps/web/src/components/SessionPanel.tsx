@@ -1,6 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SessionClient } from '../lib/session-client.js';
 import { useMetronome } from '../lib/store.js';
+import {
+  clearHash,
+  forgetOwnerSecret,
+  readCodeFromHash,
+  recallOwnerSecret,
+  rememberOwnerSecret,
+  writeCodeToHash,
+} from '../lib/url-session.js';
 import { COPY } from '../copy/strings.js';
 
 const WORKER_URL = (import.meta.env.VITE_SESSION_WORKER_URL as string | undefined) ?? 'http://localhost:8787';
@@ -23,6 +31,15 @@ export function SessionPanel(): JSX.Element {
   const [client, setClient] = useState<SessionClient | null>(null);
   const setSessionRole = useMetronome((s) => s.setSessionRole);
   const sessionRole = useMetronome((s) => s.sessionRole);
+  // Tracks the code of the connection we *automatically* started from the URL
+  // on mount. Used to decide whether to drop a stale owner secret when the
+  // worker rejects the auto-rejoin's `claim-owner`. We deliberately do NOT
+  // clear the URL on every error: transient socket failures and `bad-secret`
+  // both still leave a live session the user can re-join as a member.
+  const autoConnectCodeRef = useRef<string | null>(null);
+  // StrictMode double-runs the mount effect; this guard makes sure we don't
+  // open two WebSockets to the same session on the first render.
+  const didAutoConnectRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -54,12 +71,27 @@ export function SessionPanel(): JSX.Element {
         setStatus('connected');
         setRttMs(Math.round(e.rttMs));
       },
-      onError: (_code, msg) => {
-        setError(msg);
+      onError: (errCode, msg) => {
+        // On `bad-secret` during auto-rejoin: the stored owner secret is stale
+        // (or never belonged to this session in the first place — codes can be
+        // recycled). Forget it so future reloads don't keep trying to claim
+        // owner, drop the optimistic "you are the owner" badge, and demote to
+        // member — the session itself is alive and we stay connected to it.
+        // For every other error (`socket` blips, `internal`, etc.) treat the
+        // failure as transient: surface the message but don't touch URL or
+        // storage, and fall back to solo since the connection itself is
+        // likely going down (onClose will fire shortly).
+        if (autoConnectCodeRef.current === codeToUse && errCode === 'bad-secret') {
+          forgetOwnerSecret(codeToUse);
+          setCreated(null);
+          autoConnectCodeRef.current = null;
+          setError('Owner credentials no longer valid — joined as member.');
+          setSessionRole('member');
+        } else {
+          setError(msg);
+          setSessionRole('solo');
+        }
         setStatus('error');
-        // A claim-owner failure or any other socket error means we can't
-        // trust the role we just optimistically set. Fall back to solo.
-        setSessionRole('solo');
       },
       onClose: () => {
         setStatus('idle');
@@ -69,6 +101,31 @@ export function SessionPanel(): JSX.Element {
     setClient(c);
   };
 
+  // On mount: if the URL already has a valid session code, try to rejoin it.
+  // If sessionStorage also has the matching owner secret, we'll reclaim owner
+  // status — otherwise we join as a member.
+  useEffect(() => {
+    if (didAutoConnectRef.current) return;
+    didAutoConnectRef.current = true;
+    const codeFromUrl = readCodeFromHash();
+    if (codeFromUrl === null) return;
+    const credential = recallOwnerSecret(codeFromUrl);
+    setCode(codeFromUrl);
+    autoConnectCodeRef.current = codeFromUrl;
+    if (credential !== null) {
+      // We have a credential stashed, so we *believe* we're the owner. Surface
+      // that in the UI right away by setting `created` — the actual ownership
+      // claim happens inside SessionClient.onOpen via claim-owner.
+      setCreated({
+        code: codeFromUrl,
+        sessionId: credential.sessionId,
+        ownerSecret: credential.secret,
+      });
+    }
+    connect(codeFromUrl, credential?.secret ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional mount-only
+  }, []);
+
   const handleCreate = async (): Promise<void> => {
     setError(null);
     try {
@@ -77,6 +134,8 @@ export function SessionPanel(): JSX.Element {
       const body = (await res.json()) as CreatedSession;
       setCreated(body);
       setCode(body.code);
+      writeCodeToHash(body.code);
+      rememberOwnerSecret(body.code, body.sessionId, body.ownerSecret);
       connect(body.code, body.ownerSecret);
     } catch (e) {
       setError(String(e));
@@ -91,12 +150,17 @@ export function SessionPanel(): JSX.Element {
       setError('Code must be 4 characters');
       return;
     }
-    connect(code.toUpperCase(), null);
+    const upper = code.toUpperCase();
+    writeCodeToHash(upper);
+    connect(upper, null);
   };
 
   const handleLeave = (): void => {
     client?.close();
     setClient(null);
+    if (code) forgetOwnerSecret(code);
+    clearHash();
+    autoConnectCodeRef.current = null;
     setCreated(null);
     setCode('');
     setMemberCount(0);
