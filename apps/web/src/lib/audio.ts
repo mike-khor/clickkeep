@@ -3,6 +3,28 @@ let masterGain: GainNode | null = null;
 let proxyCtx: AudioContext | null = null;
 let muted = false;
 
+interface BeatRecord {
+  beat: number;
+  audioTime: number;
+  recordedAt: number;
+}
+
+interface ErrorRecord {
+  message: string;
+  at: number;
+}
+
+const recentBeats: BeatRecord[] = [];
+const RECENT_BEATS_MAX = 32;
+// A ring buffer (not a single slot) because the global error listener installed
+// in installDebugBridge catches every page-level error, not just engine ones —
+// without a buffer, an unrelated unhandledrejection would clobber the real
+// scheduler error before anyone reads it.
+const recentErrors: ErrorRecord[] = [];
+const RECENT_ERRORS_MAX = 8;
+let beatsScheduled = 0;
+let lastBeatAt: number | null = null;
+
 /**
  * Lazily create the AudioContext. Browsers require a user gesture before audio,
  * so this should be called from a click handler.
@@ -22,14 +44,19 @@ export function getAudioContext(): AudioContext {
     masterGain.gain.value = muted ? 0 : 1;
     masterGain.connect(realCtx.destination);
     proxyCtx = new Proxy(realCtx, {
-      get(target, prop, receiver) {
+      get(target, prop) {
         if (prop === 'destination') {
           return masterGain;
         }
-        const value = Reflect.get(target, prop, receiver);
+        // Why `target` (not the proxy) as the receiver: Web API getters like
+        // `currentTime` and `state` brand-check `this` against an internal slot
+        // and throw `TypeError: Illegal invocation` when invoked with a Proxy
+        // as the receiver. Functions are bound to `target` for the same reason.
+        const value = Reflect.get(target, prop, target);
         return typeof value === 'function' ? value.bind(target) : value;
       },
     });
+    installDebugBridge();
   }
   if (realCtx.state === 'suspended') {
     void realCtx.resume();
@@ -57,4 +84,92 @@ export function setMuted(next: boolean): void {
 
 export function isMuted(): boolean {
   return muted;
+}
+
+/**
+ * Record a beat that the scheduler scheduled. Called from the engine driver
+ * (see SoloMetronome) so the debug bridge has a live signal of "is the click
+ * engine actually firing?" — an agent or human can read window.__clickkeep
+ * without listening for sound.
+ */
+export function recordBeat(beat: number, audioTime: number): void {
+  beatsScheduled += 1;
+  lastBeatAt = performance.now();
+  recentBeats.push({ beat, audioTime, recordedAt: lastBeatAt });
+  if (recentBeats.length > RECENT_BEATS_MAX) recentBeats.shift();
+}
+
+export function recordEngineError(err: unknown): void {
+  const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  recentErrors.push({ message, at: performance.now() });
+  if (recentErrors.length > RECENT_ERRORS_MAX) recentErrors.shift();
+}
+
+export function resetEngineStats(): void {
+  recentBeats.length = 0;
+  recentErrors.length = 0;
+  beatsScheduled = 0;
+  lastBeatAt = null;
+}
+
+interface DebugSnapshot {
+  audioContext: {
+    created: boolean;
+    state: AudioContextState | null;
+    currentTime: number | null;
+    sampleRate: number | null;
+  };
+  output: { muted: boolean; masterGain: number | null };
+  engine: {
+    beatsScheduled: number;
+    lastBeatAt: number | null;
+    msSinceLastBeat: number | null;
+    recentBeats: BeatRecord[];
+    recentErrors: ErrorRecord[];
+  };
+}
+
+function snapshot(): DebugSnapshot {
+  return {
+    audioContext: {
+      created: realCtx !== null,
+      state: realCtx?.state ?? null,
+      currentTime: realCtx?.currentTime ?? null,
+      sampleRate: realCtx?.sampleRate ?? null,
+    },
+    output: { muted, masterGain: masterGain?.gain.value ?? null },
+    engine: {
+      beatsScheduled,
+      lastBeatAt,
+      msSinceLastBeat: lastBeatAt === null ? null : performance.now() - lastBeatAt,
+      recentBeats: [...recentBeats],
+      recentErrors: [...recentErrors],
+    },
+  };
+}
+
+/** Heartbeat: true if a beat fired recently. Threshold is wider than the slowest tempo (30 BPM = 2s/beat). */
+function isRunning(): boolean {
+  if (lastBeatAt === null) return false;
+  return performance.now() - lastBeatAt < 2500;
+}
+
+declare global {
+  interface Window {
+    __clickkeep?: {
+      snapshot: () => DebugSnapshot;
+      isRunning: () => boolean;
+    };
+  }
+}
+
+function installDebugBridge(): void {
+  if (typeof window === 'undefined') return;
+  if (window.__clickkeep !== undefined) return;
+  window.__clickkeep = { snapshot, isRunning };
+  window.addEventListener('error', (e) => {
+    if (e.error !== undefined) recordEngineError(e.error);
+    else recordEngineError(e.message);
+  });
+  window.addEventListener('unhandledrejection', (e) => recordEngineError(e.reason));
 }
