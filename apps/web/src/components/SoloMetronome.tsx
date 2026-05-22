@@ -95,6 +95,10 @@ export function SoloMetronome(): JSX.Element {
     const anchor: Anchor = { startAt, bpm, beatsPerBar };
     anchorRef.current = anchor;
     resetEngineStats();
+    // startClick fires its first tick synchronously, so a broken AudioContext
+    // throws here on construction. Ticks 2..N run inside setInterval and surface
+    // via the window 'error' listener installed in audio.ts — both paths feed
+    // the same recentErrors buffer.
     try {
       runningRef.current = startScheduler(ctx, anchor, setCurrentBeat, beatsPerBarRef);
     } catch (err) {

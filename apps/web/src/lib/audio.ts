@@ -9,11 +9,21 @@ interface BeatRecord {
   recordedAt: number;
 }
 
+interface ErrorRecord {
+  message: string;
+  at: number;
+}
+
 const recentBeats: BeatRecord[] = [];
 const RECENT_BEATS_MAX = 32;
+// A ring buffer (not a single slot) because the global error listener installed
+// in installDebugBridge catches every page-level error, not just engine ones —
+// without a buffer, an unrelated unhandledrejection would clobber the real
+// scheduler error before anyone reads it.
+const recentErrors: ErrorRecord[] = [];
+const RECENT_ERRORS_MAX = 8;
 let beatsScheduled = 0;
 let lastBeatAt: number | null = null;
-let lastError: { message: string; at: number } | null = null;
 
 /**
  * Lazily create the AudioContext. Browsers require a user gesture before audio,
@@ -91,11 +101,13 @@ export function recordBeat(beat: number, audioTime: number): void {
 
 export function recordEngineError(err: unknown): void {
   const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-  lastError = { message, at: performance.now() };
+  recentErrors.push({ message, at: performance.now() });
+  if (recentErrors.length > RECENT_ERRORS_MAX) recentErrors.shift();
 }
 
 export function resetEngineStats(): void {
   recentBeats.length = 0;
+  recentErrors.length = 0;
   beatsScheduled = 0;
   lastBeatAt = null;
 }
@@ -113,7 +125,7 @@ interface DebugSnapshot {
     lastBeatAt: number | null;
     msSinceLastBeat: number | null;
     recentBeats: BeatRecord[];
-    lastError: { message: string; at: number } | null;
+    recentErrors: ErrorRecord[];
   };
 }
 
@@ -131,7 +143,7 @@ function snapshot(): DebugSnapshot {
       lastBeatAt,
       msSinceLastBeat: lastBeatAt === null ? null : performance.now() - lastBeatAt,
       recentBeats: [...recentBeats],
-      lastError,
+      recentErrors: [...recentErrors],
     },
   };
 }
