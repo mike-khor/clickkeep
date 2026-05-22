@@ -200,7 +200,12 @@ jobs:
 
   auto-merge:
     needs: classify
-    if: needs.classify.outputs.tier == '1'
+    # Skip on PRs from forks — the GITHUB_TOKEN is read-only there and the
+    # merge step would just fail with a noisy 403. Auto-merge only applies
+    # to branches pushed directly to this repo.
+    if: |
+      needs.classify.outputs.tier == '1' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Enable auto-merge
