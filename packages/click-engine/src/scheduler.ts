@@ -2,7 +2,7 @@
 // drift come from changes here. Edits are Tier 3. Cross-reference Chris Wilson's
 // "A Tale of Two Clocks" if you need to refresh the lookahead pattern.
 
-import { beatAtServerTime, serverTimeForBeat, type TempoSegment } from '@clickkeep/sync-core';
+import { beatAtServerTime, isAccentBeat, serverTimeForBeat, type TempoSegment } from '@clickkeep/sync-core';
 
 export interface SchedulerOptions {
   /** How far ahead (sec) to schedule audio events. Bigger = safer; smaller = lower latency. */
@@ -65,7 +65,13 @@ export function startClick(tempo: TempoSegment[], opts: SchedulerOptions): Runni
       // Their delta gives us audioCtx time for the beat.
       const audioTimeForBeat = audioCtx.currentTime + (beatServerTime - serverNow) / 1000;
       if (audioTimeForBeat >= audioCtx.currentTime) {
-        playClick(audioCtx, audioTimeForBeat, nextBeat % 4 === 0);
+        // Accent on the downbeat of whichever tempo segment this beat lives in.
+        // Counting from the start of the current segment keeps the audio accent
+        // aligned with the user-selected beatsPerBar (the visual flash in
+        // BeatIndicator does the equivalent via React state). Previously this
+        // was hardcoded to `nextBeat % 4 === 0`, which drifted out of sync
+        // whenever beatsPerBar was anything other than 4.
+        playClick(audioCtx, audioTimeForBeat, isAccentBeat(tempo, nextBeat));
         onBeatScheduled(nextBeat, audioTimeForBeat);
       }
       nextBeat += 1;
