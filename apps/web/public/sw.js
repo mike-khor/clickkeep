@@ -1,7 +1,11 @@
-// Cache-first for same-origin GETs. Cross-origin (sync worker) bypasses the cache.
+// Service worker strategy:
+//   - Navigations (HTML):     network-first, fall back to cached /index.html.
+//   - Hashed /assets/* files: cache-first (Vite content-hashes the filenames).
+//   - Other same-origin GETs: cache-first with network fill.
+//   - Cross-origin + WebSocket upgrades: bypassed (sync worker lives there).
 
 const DEBUG = false;
-const CACHE_NAME = 'clickkeep-shell-v1';
+const CACHE_NAME = 'clickkeep-shell-v2';
 const APP_SHELL = ['/', '/index.html', '/favicon.svg', '/icon.svg', '/icon-maskable.svg', '/manifest.webmanifest'];
 
 const log = (...args) => {
@@ -34,10 +38,36 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   if (req.headers.get('upgrade') === 'websocket') return;
 
-  event.respondWith(handle(req));
+  if (isNavigation(req)) {
+    event.respondWith(networkFirstNavigation(req));
+    return;
+  }
+
+  event.respondWith(cacheFirst(req));
 });
 
-async function handle(req) {
+function isNavigation(req) {
+  return req.mode === 'navigate' || req.destination === 'document';
+}
+
+async function networkFirstNavigation(req) {
+  const cache = await caches.open(CACHE_NAME);
+  try {
+    const res = await fetch(req);
+    if (res.ok && res.type === 'basic') {
+      // Refresh the app shell under a stable key so offline fallback stays current.
+      cache.put('/index.html', res.clone()).catch((err) => log('shell put failed', err));
+    }
+    return res;
+  } catch (err) {
+    log('navigation offline, serving shell', req.url, err);
+    const shell = (await cache.match('/index.html')) || (await cache.match('/'));
+    if (shell) return shell;
+    throw err;
+  }
+}
+
+async function cacheFirst(req) {
   const cache = await caches.open(CACHE_NAME);
   const cached = await cache.match(req);
   if (cached) {
@@ -46,18 +76,12 @@ async function handle(req) {
   }
   try {
     const res = await fetch(req);
-    // Only cache successful, basic (same-origin) responses.
     if (res.ok && res.type === 'basic') {
       cache.put(req, res.clone()).catch((err) => log('put failed', err));
     }
     return res;
   } catch (err) {
     log('network fail', req.url, err);
-    // For SPA navigations, fall back to the cached app shell so the router can take over.
-    if (req.mode === 'navigate') {
-      const shell = await cache.match('/index.html');
-      if (shell) return shell;
-    }
     throw err;
   }
 }
