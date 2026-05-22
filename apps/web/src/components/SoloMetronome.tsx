@@ -5,6 +5,7 @@ import { getAudioContext } from '../lib/audio.js';
 import { COPY } from '../copy/strings.js';
 import { BeatIndicator } from './BeatIndicator.js';
 import { TapButton } from './TapButton.js';
+import { MuteButton } from './MuteButton.js';
 
 // Must exceed the scheduler's lookahead (100ms) so a tempo change can never
 // race a beat that's already been queued for audio playback. 150ms gives a
@@ -132,6 +133,7 @@ export function SoloMetronome(): JSX.Element {
         >
           {isPlaying ? COPY.solo.stop : COPY.solo.play}
         </button>
+        <MuteButton />
       </div>
     </div>
   );
