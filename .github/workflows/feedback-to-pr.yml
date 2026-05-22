@@ -1,24 +1,22 @@
-# Feedback → PR pipeline.
+# Owner-initiated dispatch for a single feedback issue.
 #
-# Triggered when:
-#   - An issue is labeled `feedback`
-#   - A comment on a feedback issue contains `/agent`
+# Triggered ONLY when the repo owner comments `/agent` on an issue. The
+# `feedback` label is informational — it does NOT, by itself, fire this
+# workflow. Applying the label so the owner can browse feedback later is
+# the only purpose of the label today.
 #
-# Sends the issue body to Claude (via the official action), which opens a PR.
-# The tier-gate workflow then handles approval/merge.
+# A separate PM-triage workflow may handle batched feedback intake later;
+# until then, this `/agent` comment trigger is the only path from a
+# GitHub issue to a Claude-authored PR.
 #
 # Setup required (one-time, by owner):
-#   - Repo secret: ANTHROPIC_API_KEY  (or use OAuth via the action's setup)
-#   - Issue label: feedback
-#   - Issue label: approved-tier-3   (used by tier-gate)
+#   - Repo secret: ANTHROPIC_API_KEY
 #
 # This file is intentionally minimal: the real safety policy is in tier-gate.yml.
 
 name: Feedback to PR
 
 on:
-  issues:
-    types: [labeled]
   issue_comment:
     types: [created]
 
@@ -30,11 +28,14 @@ permissions:
 
 jobs:
   dispatch:
+    # `issue_comment` fires on both issues AND pull requests (PRs are issues
+    # under the hood). The pull_request null-check filters to issue threads
+    # only — `/agent` in a PR comment thread should never fire this workflow.
     if: |
-      (github.event.action == 'labeled' && github.event.label.name == 'feedback') ||
-      (github.event.action == 'created' &&
-       contains(github.event.comment.body, '/agent') &&
-       github.event.comment.author_association == 'OWNER')
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      contains(github.event.comment.body, '/agent') &&
+      github.event.comment.author_association == 'OWNER'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +46,7 @@ jobs:
           prompt: |
             You are responding to user feedback filed as a GitHub issue. Read the issue body and any comments.
             Make the smallest, most surgical change that addresses the feedback. Follow CLAUDE.md.
-            If the change would touch any Tier 3 path (see CLAUDE.md), STOP and post a comment on the issue
-            explaining what would need to change and why you can't proceed autonomously.
-            Otherwise, open a PR with a clear title and description that references this issue.
+            The owner has explicitly authorized this dispatch by commenting `/agent`, so you may
+            proceed even if the change touches a Tier 3 path. The tier gate will still classify
+            the resulting PR; Tier 3 PRs require the `approved-tier-3` label before merge.
+            Open a PR with a clear title and description that references this issue.
