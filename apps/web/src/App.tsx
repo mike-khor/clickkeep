@@ -5,23 +5,21 @@ import { COPY } from './copy/strings.js';
 
 export function App(): JSX.Element {
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="flex items-center justify-between border-b border-ink-200 dark:border-ink-800 px-6 py-4">
+    <div className="flex min-h-[100svh] flex-col">
+      <header className="flex shrink-0 items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
         <div className="flex items-baseline gap-3">
-          <h1 className="text-xl font-bold tracking-tight">{COPY.appName}</h1>
-          <p className="hidden sm:block text-sm text-ink-500 dark:text-ink-400">{COPY.tagline}</p>
+          <h1 className="text-lg sm:text-xl font-bold tracking-tight">{COPY.appName}</h1>
+          <p className="hidden md:block text-sm text-ink-500 dark:text-ink-400">{COPY.tagline}</p>
         </div>
-        <ThemeToggle />
+        <div className="flex items-center gap-2">
+          <SessionPanel />
+          <ThemeToggle />
+        </div>
       </header>
 
-      <main className="flex flex-1 flex-col-reverse lg:flex-row items-center justify-center gap-12 px-6 py-12">
+      <main className="flex flex-1 items-center justify-center px-4 pb-4 sm:px-6 sm:pb-6">
         <SoloMetronome />
-        <SessionPanel />
       </main>
-
-      <footer className="border-t border-ink-200 dark:border-ink-800 px-6 py-3 text-xs text-ink-500 dark:text-ink-400">
-        Group sync uses your local clock offset to the session host — synchronized clicks across devices land in v1.1.
-      </footer>
     </div>
   );
 }
