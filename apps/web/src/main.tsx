@@ -11,3 +11,12 @@ createRoot(rootEl).render(
     <App />
   </StrictMode>,
 );
+
+// Only register in prod — in dev the SW would serve stale bundles and break HMR.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // Registration failures are non-fatal; the app still works online.
+    });
+  });
+}
