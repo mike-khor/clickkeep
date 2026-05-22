@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { TempoMap } from './midi-tempo.js';
 
 /**
  * 'solo'   — no session connected; local Play controls work as today.
@@ -24,6 +25,11 @@ interface MetronomeState {
   visualEnabled: boolean;
   hapticEnabled: boolean;
   sessionRole: SessionRole;
+  // Optional MIDI-loaded tempo map. When set, solo playback applies these
+  // BPM changes at their `timeSec` offsets from the moment Play was pressed.
+  // Group sync of tempo maps is out of scope for this PR.
+  tempoMap: TempoMap | null;
+  tempoMapName: string | null;
   setBpm: (bpm: number) => void;
   setBeatsPerBar: (n: number) => void;
   setPlaying: (playing: boolean) => void;
@@ -35,6 +41,8 @@ interface MetronomeState {
   setHapticEnabled: (enabled: boolean) => void;
   toggleHapticEnabled: () => void;
   setSessionRole: (role: SessionRole) => void;
+  setTempoMap: (map: TempoMap | null, name?: string | null) => void;
+  clearTempoMap: () => void;
 }
 
 export const useMetronome = create<MetronomeState>((set) => ({
@@ -46,6 +54,8 @@ export const useMetronome = create<MetronomeState>((set) => ({
   visualEnabled: true,
   hapticEnabled: true,
   sessionRole: 'solo',
+  tempoMap: null,
+  tempoMapName: null,
   // Floats are allowed (e.g. 120.5). Integer callers (slider, tap-tempo) still work
   // because clamp is a pure numeric operation. Display layers should call .toFixed(1).
   setBpm: (bpm) => {
@@ -62,6 +72,21 @@ export const useMetronome = create<MetronomeState>((set) => ({
   setHapticEnabled: (hapticEnabled) => set({ hapticEnabled }),
   toggleHapticEnabled: () => set((s) => ({ hapticEnabled: !s.hapticEnabled })),
   setSessionRole: (sessionRole) => set({ sessionRole }),
+  // Snap the active BPM to the first entry so the UI doesn't show a stale
+  // manual value sitting above a freshly-loaded timeline.
+  setTempoMap: (tempoMap, name = null) => {
+    if (tempoMap === null || tempoMap.length === 0) {
+      set({ tempoMap: null, tempoMapName: null });
+      return;
+    }
+    const first = tempoMap[0];
+    if (first === undefined) {
+      set({ tempoMap: null, tempoMapName: null });
+      return;
+    }
+    set({ tempoMap, tempoMapName: name, bpm: clamp(first.bpm, 30, 300) });
+  },
+  clearTempoMap: () => set({ tempoMap: null, tempoMapName: null }),
 }));
 
 function clamp(n: number, min: number, max: number): number {
