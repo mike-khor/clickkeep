@@ -17,6 +17,12 @@ interface MetronomeState {
   isPlaying: boolean;
   currentBeat: number;
   muted: boolean;
+  // Independent per-output toggles. All default ON; each is local-only (no
+  // session traffic) so members can silence their device without affecting
+  // anyone else. `muted` covers audio for backwards-compat; visual/haptic
+  // mirror it for the other two output channels.
+  visualEnabled: boolean;
+  hapticEnabled: boolean;
   sessionRole: SessionRole;
   setBpm: (bpm: number) => void;
   setBeatsPerBar: (n: number) => void;
@@ -24,6 +30,10 @@ interface MetronomeState {
   setCurrentBeat: (beat: number) => void;
   setMuted: (muted: boolean) => void;
   toggleMuted: () => void;
+  setVisualEnabled: (enabled: boolean) => void;
+  toggleVisualEnabled: () => void;
+  setHapticEnabled: (enabled: boolean) => void;
+  toggleHapticEnabled: () => void;
   setSessionRole: (role: SessionRole) => void;
 }
 
@@ -33,6 +43,8 @@ export const useMetronome = create<MetronomeState>((set) => ({
   isPlaying: false,
   currentBeat: 0,
   muted: false,
+  visualEnabled: true,
+  hapticEnabled: true,
   sessionRole: 'solo',
   // Floats are allowed (e.g. 120.5). Integer callers (slider, tap-tempo) still work
   // because clamp is a pure numeric operation. Display layers should call .toFixed(1).
@@ -45,6 +57,10 @@ export const useMetronome = create<MetronomeState>((set) => ({
   setCurrentBeat: (currentBeat) => set({ currentBeat }),
   setMuted: (muted) => set({ muted }),
   toggleMuted: () => set((s) => ({ muted: !s.muted })),
+  setVisualEnabled: (visualEnabled) => set({ visualEnabled }),
+  toggleVisualEnabled: () => set((s) => ({ visualEnabled: !s.visualEnabled })),
+  setHapticEnabled: (hapticEnabled) => set({ hapticEnabled }),
+  toggleHapticEnabled: () => set((s) => ({ hapticEnabled: !s.hapticEnabled })),
   setSessionRole: (sessionRole) => set({ sessionRole }),
 }));
 

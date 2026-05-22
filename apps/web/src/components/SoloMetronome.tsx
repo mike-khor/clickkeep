@@ -5,7 +5,7 @@ import { getAudioContext, recordBeat, recordEngineError, resetEngineStats } from
 import { COPY } from '../copy/strings.js';
 import { BeatIndicator } from './BeatIndicator.js';
 import { TapButton } from './TapButton.js';
-import { MuteButton } from './MuteButton.js';
+import { OutputToggles } from './OutputToggles.js';
 
 // Must exceed the scheduler's lookahead (100ms) so a tempo change can never
 // race a beat that's already been queued for audio playback. 150ms gives a
@@ -36,6 +36,11 @@ export function SoloMetronome(): JSX.Element {
   // so signature changes also flow through without restarting the engine.
   const beatsPerBarRef = useRef(beatsPerBar);
   beatsPerBarRef.current = beatsPerBar;
+  // Same pattern for haptic toggle: gate the pulse() call from inside the
+  // scheduler callback without forcing an engine restart on every flip.
+  const hapticEnabled = useMetronome((s) => s.hapticEnabled);
+  const hapticEnabledRef = useRef(hapticEnabled);
+  hapticEnabledRef.current = hapticEnabled;
 
   // Members listen, they don't drive: lock every tempo / playback affordance.
   // The Tier-3 worker rejects set-state/play/pause from non-owners; this is the
@@ -100,7 +105,7 @@ export function SoloMetronome(): JSX.Element {
     // via the window 'error' listener installed in audio.ts — both paths feed
     // the same recentErrors buffer.
     try {
-      runningRef.current = startScheduler(ctx, anchor, setCurrentBeat, beatsPerBarRef);
+      runningRef.current = startScheduler(ctx, anchor, setCurrentBeat, beatsPerBarRef, hapticEnabledRef);
     } catch (err) {
       recordEngineError(err);
       throw err;
@@ -138,7 +143,7 @@ export function SoloMetronome(): JSX.Element {
     const nextAnchor: Anchor = { startAt: nextBeatAt, bpm, beatsPerBar };
     runningRef.current?.stop();
     anchorRef.current = nextAnchor;
-    runningRef.current = startScheduler(ctx, nextAnchor, setCurrentBeat, beatsPerBarRef);
+    runningRef.current = startScheduler(ctx, nextAnchor, setCurrentBeat, beatsPerBarRef, hapticEnabledRef);
   }, [bpm, beatsPerBar, isPlaying, setCurrentBeat]);
 
   return (
@@ -232,7 +237,7 @@ export function SoloMetronome(): JSX.Element {
         >
           {isPlaying ? COPY.solo.stop : COPY.solo.play}
         </button>
-        <MuteButton />
+        <OutputToggles />
       </div>
 
       {isMember && (
@@ -252,6 +257,7 @@ function startScheduler(
   anchor: Anchor,
   setCurrentBeat: (beat: number) => void,
   beatsPerBarRef: { current: number },
+  hapticEnabledRef: { current: boolean },
 ): RunningClick {
   const tempo = [{ startAt: anchor.startAt, bpm: anchor.bpm, beatsPerBar: anchor.beatsPerBar }];
   return startClick(tempo, {
@@ -266,6 +272,7 @@ function startScheduler(
         // Read the latest signature so handoffs feel correct on the very
         // first beat after a change, even before React re-renders.
         const bpbNow = beatsPerBarRef.current;
+        if (!hapticEnabledRef.current) return;
         if (beat % bpbNow === 0) pulse(60);
         else pulse(20);
       }, 0);
