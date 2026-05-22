@@ -15,6 +15,10 @@ export const COPY = {
     mute: 'Mute click',
     unmute: 'Unmute click',
     muted: 'Muted',
+    visualOn: 'Hide visual flash',
+    visualOff: 'Show visual flash',
+    hapticOn: 'Disable haptic',
+    hapticOff: 'Enable haptic',
   },
   session: {
     create: 'Create session',

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useMetronome } from '../lib/store.js';
 
 interface Props {
   /** Currently scheduled beat number (monotonic). */
@@ -9,9 +10,12 @@ interface Props {
 
 /**
  * Big visual flash on each beat. Accent (orange) on the downbeat, neutral on others.
- * Renders a row of dots showing the position within the bar.
+ * Renders a row of dots showing the position within the bar. When the user
+ * disables the visual output, we keep the layout (static dot + dim dots) so
+ * the surrounding UI doesn't jump.
  */
 export function BeatIndicator({ beat, beatsPerBar, isPlaying }: Props): JSX.Element {
+  const visualEnabled = useMetronome((s) => s.visualEnabled);
   const [flashing, setFlashing] = useState(false);
   const positionInBar = ((beat % beatsPerBar) + beatsPerBar) % beatsPerBar;
   const isDownbeat = positionInBar === 0;
@@ -23,12 +27,15 @@ export function BeatIndicator({ beat, beatsPerBar, isPlaying }: Props): JSX.Elem
     return () => clearTimeout(t);
   }, [beat, isPlaying]);
 
+  const showFlash = flashing && isPlaying && visualEnabled;
+  const showDotHighlight = isPlaying && visualEnabled;
+
   return (
     <div className="flex flex-col items-center gap-6">
       <div
         className={[
           'h-48 w-48 rounded-full transition-all duration-75',
-          flashing && isPlaying
+          showFlash
             ? isDownbeat
               ? 'bg-accent scale-105 shadow-2xl shadow-accent/50'
               : 'bg-ink-300 dark:bg-ink-500 scale-105'
@@ -42,7 +49,7 @@ export function BeatIndicator({ beat, beatsPerBar, isPlaying }: Props): JSX.Elem
             key={i}
             className={[
               'h-3 w-3 rounded-full',
-              i === positionInBar && isPlaying
+              i === positionInBar && showDotHighlight
                 ? i === 0
                   ? 'bg-accent'
                   : 'bg-ink-500 dark:bg-ink-300'
