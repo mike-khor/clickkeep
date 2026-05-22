@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { startClick, type RunningClick, pulse } from '@clickkeep/click-engine';
 import { useMetronome } from '../lib/store.js';
-import { getAudioContext } from '../lib/audio.js';
+import { getAudioContext, recordBeat, recordEngineError, resetEngineStats } from '../lib/audio.js';
 import { COPY } from '../copy/strings.js';
 import { BeatIndicator } from './BeatIndicator.js';
 import { TapButton } from './TapButton.js';
@@ -99,7 +99,17 @@ export function SoloMetronome(): JSX.Element {
     const startAt = performance.now();
     const anchor: Anchor = { startAt, bpm, beatsPerBar };
     anchorRef.current = anchor;
-    runningRef.current = startScheduler(ctx, anchor, setCurrentBeat, beatsPerBarRef, hapticEnabledRef);
+    resetEngineStats();
+    // startClick fires its first tick synchronously, so a broken AudioContext
+    // throws here on construction. Ticks 2..N run inside setInterval and surface
+    // via the window 'error' listener installed in audio.ts — both paths feed
+    // the same recentErrors buffer.
+    try {
+      runningRef.current = startScheduler(ctx, anchor, setCurrentBeat, beatsPerBarRef, hapticEnabledRef);
+    } catch (err) {
+      recordEngineError(err);
+      throw err;
+    }
     return () => {
       runningRef.current?.stop();
       runningRef.current = null;
@@ -253,7 +263,8 @@ function startScheduler(
   return startClick(tempo, {
     audioCtx: ctx,
     nowServerMs: () => performance.now(),
-    onBeatScheduled: (beat) => {
+    onBeatScheduled: (beat, audioTime) => {
+      recordBeat(beat, audioTime);
       // Schedule UI flash + haptic at the audio time. requestAnimationFrame
       // alignment is approximate; for solo mode this is good enough.
       setTimeout(() => {
