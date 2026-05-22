@@ -19,6 +19,8 @@ export const COPY = {
     visualOff: 'Show visual flash',
     hapticOn: 'Disable haptic',
     hapticOff: 'Enable haptic',
+    tone: 'Tone',
+    accentPatternLabel: 'Per-beat accent pattern (click to cycle)',
   },
   tempoMap: {
     load: 'Load MIDI',

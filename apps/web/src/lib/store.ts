@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { BeatState, ToneProfile } from '@clickkeep/click-engine';
 import type { TempoMap } from './midi-tempo.js';
 
 /**
@@ -30,6 +31,12 @@ interface MetronomeState {
   // Group sync of tempo maps is out of scope for this PR.
   tempoMap: TempoMap | null;
   tempoMapName: string | null;
+  // Click voice profile. In group mode this is local-only for now (per-member
+  // choice). Default 'pitched' preserves the original tone.
+  toneProfile: ToneProfile;
+  // Per-beat accent pattern. Length always === beatsPerBar; index 0 is the
+  // downbeat. Resized in setBeatsPerBar to preserve existing entries.
+  accentPattern: BeatState[];
   setBpm: (bpm: number) => void;
   setBeatsPerBar: (n: number) => void;
   setPlaying: (playing: boolean) => void;
@@ -43,11 +50,16 @@ interface MetronomeState {
   setSessionRole: (role: SessionRole) => void;
   setTempoMap: (map: TempoMap | null, name?: string | null) => void;
   clearTempoMap: () => void;
+  setToneProfile: (profile: ToneProfile) => void;
+  setAccentPattern: (pattern: BeatState[]) => void;
+  cycleBeatState: (index: number) => void;
 }
+
+const DEFAULT_BEATS_PER_BAR = 4;
 
 export const useMetronome = create<MetronomeState>((set) => ({
   bpm: 120,
-  beatsPerBar: 4,
+  beatsPerBar: DEFAULT_BEATS_PER_BAR,
   isPlaying: false,
   currentBeat: 0,
   muted: false,
@@ -56,13 +68,19 @@ export const useMetronome = create<MetronomeState>((set) => ({
   sessionRole: 'solo',
   tempoMap: null,
   tempoMapName: null,
+  toneProfile: 'pitched',
+  accentPattern: defaultPattern(DEFAULT_BEATS_PER_BAR),
   // Floats are allowed (e.g. 120.5). Integer callers (slider, tap-tempo) still work
   // because clamp is a pure numeric operation. Display layers should call .toFixed(1).
   setBpm: (bpm) => {
     if (!Number.isFinite(bpm)) return;
     set({ bpm: clamp(bpm, 30, 300) });
   },
-  setBeatsPerBar: (beatsPerBar) => set({ beatsPerBar: clamp(beatsPerBar, 1, 12) }),
+  setBeatsPerBar: (beatsPerBar) =>
+    set((s) => {
+      const next = clamp(beatsPerBar, 1, 12);
+      return { beatsPerBar: next, accentPattern: resizePattern(s.accentPattern, next) };
+    }),
   setPlaying: (isPlaying) => set({ isPlaying }),
   setCurrentBeat: (currentBeat) => set({ currentBeat }),
   setMuted: (muted) => set({ muted }),
@@ -87,8 +105,39 @@ export const useMetronome = create<MetronomeState>((set) => ({
     set({ tempoMap, tempoMapName: name, bpm: clamp(first.bpm, 30, 300) });
   },
   clearTempoMap: () => set({ tempoMap: null, tempoMapName: null }),
+  setToneProfile: (toneProfile) => set({ toneProfile }),
+  setAccentPattern: (accentPattern) => set({ accentPattern }),
+  cycleBeatState: (index) =>
+    set((s) => {
+      if (index < 0 || index >= s.accentPattern.length) return s;
+      const next = s.accentPattern.slice();
+      next[index] = nextBeatState(s.accentPattern[index] ?? 'normal');
+      return { accentPattern: next };
+    }),
 }));
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
+}
+
+function defaultPattern(length: number): BeatState[] {
+  const pattern: BeatState[] = new Array<BeatState>(length).fill('normal');
+  if (length > 0) pattern[0] = 'accent';
+  return pattern;
+}
+
+/** Preserve existing entries; pad new beats with 'normal'. */
+function resizePattern(pattern: BeatState[], length: number): BeatState[] {
+  if (pattern.length === length) return pattern;
+  const next: BeatState[] = new Array<BeatState>(length).fill('normal');
+  for (let i = 0; i < Math.min(pattern.length, length); i++) {
+    next[i] = pattern[i] ?? 'normal';
+  }
+  return next;
+}
+
+function nextBeatState(state: BeatState): BeatState {
+  if (state === 'accent') return 'normal';
+  if (state === 'normal') return 'mute';
+  return 'accent';
 }
