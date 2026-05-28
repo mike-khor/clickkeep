@@ -1,5 +1,13 @@
 import { create } from 'zustand';
 import type { TempoMap } from './midi-tempo.js';
+import {
+  getStoredHapticEnabled,
+  getStoredMuted,
+  getStoredVisualEnabled,
+  setStoredHapticEnabled,
+  setStoredMuted,
+  setStoredVisualEnabled,
+} from './output-prefs.js';
 
 /**
  * 'solo'   — no session connected; local Play controls work as today.
@@ -50,9 +58,9 @@ export const useMetronome = create<MetronomeState>((set) => ({
   beatsPerBar: 4,
   isPlaying: false,
   currentBeat: 0,
-  muted: false,
-  visualEnabled: true,
-  hapticEnabled: true,
+  muted: getStoredMuted(),
+  visualEnabled: getStoredVisualEnabled(),
+  hapticEnabled: getStoredHapticEnabled(),
   sessionRole: 'solo',
   tempoMap: null,
   tempoMapName: null,
@@ -65,12 +73,36 @@ export const useMetronome = create<MetronomeState>((set) => ({
   setBeatsPerBar: (beatsPerBar) => set({ beatsPerBar: clamp(beatsPerBar, 1, 12) }),
   setPlaying: (isPlaying) => set({ isPlaying }),
   setCurrentBeat: (currentBeat) => set({ currentBeat }),
-  setMuted: (muted) => set({ muted }),
-  toggleMuted: () => set((s) => ({ muted: !s.muted })),
-  setVisualEnabled: (visualEnabled) => set({ visualEnabled }),
-  toggleVisualEnabled: () => set((s) => ({ visualEnabled: !s.visualEnabled })),
-  setHapticEnabled: (hapticEnabled) => set({ hapticEnabled }),
-  toggleHapticEnabled: () => set((s) => ({ hapticEnabled: !s.hapticEnabled })),
+  setMuted: (muted) => {
+    setStoredMuted(muted);
+    set({ muted });
+  },
+  toggleMuted: () =>
+    set((s) => {
+      const muted = !s.muted;
+      setStoredMuted(muted);
+      return { muted };
+    }),
+  setVisualEnabled: (visualEnabled) => {
+    setStoredVisualEnabled(visualEnabled);
+    set({ visualEnabled });
+  },
+  toggleVisualEnabled: () =>
+    set((s) => {
+      const visualEnabled = !s.visualEnabled;
+      setStoredVisualEnabled(visualEnabled);
+      return { visualEnabled };
+    }),
+  setHapticEnabled: (hapticEnabled) => {
+    setStoredHapticEnabled(hapticEnabled);
+    set({ hapticEnabled });
+  },
+  toggleHapticEnabled: () =>
+    set((s) => {
+      const hapticEnabled = !s.hapticEnabled;
+      setStoredHapticEnabled(hapticEnabled);
+      return { hapticEnabled };
+    }),
   setSessionRole: (sessionRole) => set({ sessionRole }),
   // Snap the active BPM to the first entry so the UI doesn't show a stale
   // manual value sitting above a freshly-loaded timeline.

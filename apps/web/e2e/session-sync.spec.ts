@@ -82,6 +82,43 @@ test('two clients in the same session see member-count 2', async ({ browser }) =
   }
 });
 
+test("owner's BPM change propagates to the member", async ({ browser }) => {
+  // Regression for "create session does not work": handshake/member-count was
+  // fine, but the owner's tempo never made it to the member because nothing
+  // was wired to broadcast state on owner-side store changes, and the
+  // SessionClient.onState callback was an empty stub on the member-side.
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  try {
+    const pageA = await ctxA.newPage();
+    const pageB = await ctxB.newPage();
+
+    await pageA.goto('/');
+    await pageA.getByRole('button', { name: CREATE_BUTTON }).click();
+    const code = await readCode(pageA);
+
+    await pageB.goto('/');
+    await pageB.getByLabel(CODE_LABEL).fill(code);
+    await pageB.getByRole('button', { name: JOIN_BUTTON }).click();
+
+    // Wait for both sides to be connected.
+    await expect(pageA.getByText(TWO_MEMBERS)).toBeVisible({ timeout: 10_000 });
+    await expect(pageB.getByText(TWO_MEMBERS)).toBeVisible({ timeout: 10_000 });
+
+    // Owner moves the BPM slider to 137 (chosen because it isn't the default 120).
+    const bpmInputA = pageA.getByLabel('BPM').first();
+    await bpmInputA.fill('137');
+    await bpmInputA.press('Enter');
+
+    // Member's BPM input should reflect the owner's value within a beat.
+    const bpmInputB = pageB.getByLabel('BPM').first();
+    await expect(bpmInputB).toHaveValue('137.0', { timeout: 5_000 });
+  } finally {
+    await ctxA.close();
+    await ctxB.close();
+  }
+});
+
 test('leaving the session drops the member count', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();

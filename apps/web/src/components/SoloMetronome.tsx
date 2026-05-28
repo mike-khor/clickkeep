@@ -47,16 +47,11 @@ export function SoloMetronome(): JSX.Element {
 
   // Members listen, they don't drive: lock every tempo / playback affordance.
   // The Tier-3 worker rejects set-state/play/pause from non-owners; this is the
-  // UX half of the same invariant so members never even attempt a desync.
+  // UX half of the same invariant so members never even attempt a desync. The
+  // owner's incoming state (applied in SessionPanel) now drives `isPlaying`
+  // for members, so a member's engine starts/stops in lock-step with the
+  // owner — no separate "stop on join" effect needed.
   const isMember = sessionRole === 'member';
-
-  // If the user was clicking locally and then joins someone else's session,
-  // their solo engine has to stop — otherwise it would keep firing audio while
-  // they wait for the owner's anchor. Owner state will replace this once
-  // Concert Mode wires the worker state through.
-  useEffect(() => {
-    if (isMember && isPlaying) setPlaying(false);
-  }, [isMember, isPlaying, setPlaying]);
 
   // Local editing buffer for the typed BPM input. We keep a string so users can
   // freely type "12", "120.", "120.5", etc. without us snapping mid-keystroke.

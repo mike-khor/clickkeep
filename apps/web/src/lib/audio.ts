@@ -1,7 +1,12 @@
+import { getStoredMuted } from './output-prefs.js';
+
 let realCtx: AudioContext | null = null;
 let masterGain: GainNode | null = null;
 let proxyCtx: AudioContext | null = null;
-let muted = false;
+// Start matched to the persisted store value so a previously-muted user
+// can't briefly hear audio if a future component creates an AudioContext
+// before OutputToggles mounts and runs its reconciliation effect.
+let muted = getStoredMuted();
 
 interface BeatRecord {
   beat: number;
