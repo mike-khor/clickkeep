@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { startClick, type RunningClick, pulse } from '@clickkeep/click-engine';
+import {
+  getVoice,
+  startClick,
+  type BeatState,
+  type RunningClick,
+  type ToneProfile,
+  pulse,
+} from '@clickkeep/click-engine';
 import { useMetronome } from '../lib/store.js';
 import { getAudioContext, recordBeat, recordEngineError, resetEngineStats } from '../lib/audio.js';
 import { COPY } from '../copy/strings.js';
@@ -8,6 +15,7 @@ import { TapButton } from './TapButton.js';
 import { OutputToggles } from './OutputToggles.js';
 import { PlayCircle } from './PlayCircle.js';
 import { MidiSheet } from './MidiSheet.js';
+import { ToneProfileSelector } from './ToneProfileSelector.js';
 
 // Must exceed the scheduler's lookahead (100ms) so a tempo change can never
 // race a beat that's already been queued for audio playback. 150ms gives a
@@ -44,6 +52,13 @@ export function SoloMetronome(): JSX.Element {
   const hapticEnabled = useMetronome((s) => s.hapticEnabled);
   const hapticEnabledRef = useRef(hapticEnabled);
   hapticEnabledRef.current = hapticEnabled;
+  // Voice + accent pattern as refs so changes flow through without a restart.
+  const toneProfile = useMetronome((s) => s.toneProfile);
+  const toneProfileRef = useRef(toneProfile);
+  toneProfileRef.current = toneProfile;
+  const accentPattern = useMetronome((s) => s.accentPattern);
+  const accentPatternRef = useRef(accentPattern);
+  accentPatternRef.current = accentPattern;
 
   // Members listen, they don't drive: lock every tempo / playback affordance.
   // The Tier-3 worker rejects set-state/play/pause from non-owners; this is the
@@ -132,7 +147,15 @@ export function SoloMetronome(): JSX.Element {
     // via the window 'error' listener installed in audio.ts — both paths feed
     // the same recentErrors buffer.
     try {
-      runningRef.current = startScheduler(ctx, anchor, setCurrentBeat, beatsPerBarRef, hapticEnabledRef);
+      runningRef.current = startScheduler(
+        ctx,
+        anchor,
+        setCurrentBeat,
+        beatsPerBarRef,
+        hapticEnabledRef,
+        toneProfileRef,
+        accentPatternRef,
+      );
     } catch (err) {
       recordEngineError(err);
       throw err;
@@ -170,7 +193,15 @@ export function SoloMetronome(): JSX.Element {
     const nextAnchor: Anchor = { startAt: nextBeatAt, bpm, beatsPerBar };
     runningRef.current?.stop();
     anchorRef.current = nextAnchor;
-    runningRef.current = startScheduler(ctx, nextAnchor, setCurrentBeat, beatsPerBarRef, hapticEnabledRef);
+    runningRef.current = startScheduler(
+      ctx,
+      nextAnchor,
+      setCurrentBeat,
+      beatsPerBarRef,
+      hapticEnabledRef,
+      toneProfileRef,
+      accentPatternRef,
+    );
   }, [bpm, beatsPerBar, isPlaying, setCurrentBeat]);
 
   // When a tempo map is loaded and the user hits Play, schedule each upcoming
@@ -208,10 +239,10 @@ export function SoloMetronome(): JSX.Element {
         disabled={isMember}
         onToggle={() => setPlaying(!isPlaying)}
       />
-      {/* BeatIndicator owns the dot row's behaviour (sound-customization agent
-          will wire click-to-cycle into the dots). We only want the dots here
-          since PlayCircle now provides the hero flash. Hiding the internal
-          flash circle via a container selector keeps BeatIndicator untouched. */}
+      {/* BeatIndicator renders the clickable dot row (accent/normal/mute cycle)
+          and the hero flash circle. We hide the flash circle here because
+          PlayCircle provides the primary play indicator. The dots remain
+          interactive — clicking cycles each beat through its three states. */}
       <div className="[&>div]:gap-0 [&>div>div:first-child]:hidden">
         <BeatIndicator beat={currentBeat} beatsPerBar={beatsPerBar} isPlaying={isPlaying} />
       </div>
@@ -296,6 +327,7 @@ export function SoloMetronome(): JSX.Element {
             ))}
           </select>
         </label>
+        <ToneProfileSelector disabled={isMember} />
         <OutputToggles />
         <MidiSheet disabled={isMember} />
       </div>
@@ -315,11 +347,22 @@ function startScheduler(
   setCurrentBeat: (beat: number) => void,
   beatsPerBarRef: { current: number },
   hapticEnabledRef: { current: boolean },
+  toneProfileRef: { current: ToneProfile },
+  accentPatternRef: { current: BeatState[] },
 ): RunningClick {
   const tempo = [{ startAt: anchor.startAt, bpm: anchor.bpm, beatsPerBar: anchor.beatsPerBar }];
   return startClick(tempo, {
     audioCtx: ctx,
     nowServerMs: () => performance.now(),
+    // Closures so a profile or pattern change takes effect on the very next
+    // scheduled beat without tearing down and restarting the engine.
+    voice: (args) => getVoice(toneProfileRef.current)(args),
+    beatStateFor: (beat) => {
+      const pattern = accentPatternRef.current;
+      if (pattern.length === 0) return 'normal';
+      const pos = ((beat % pattern.length) + pattern.length) % pattern.length;
+      return pattern[pos] ?? 'normal';
+    },
     onBeatScheduled: (beat, audioTime) => {
       recordBeat(beat, audioTime);
       // Schedule UI flash + haptic at the audio time. requestAnimationFrame
@@ -330,6 +373,9 @@ function startScheduler(
         // first beat after a change, even before React re-renders.
         const bpbNow = beatsPerBarRef.current;
         if (!hapticEnabledRef.current) return;
+        // Haptic still mirrors the natural downbeat — muted/accent state only
+        // affects audio output. Visual + haptic always fire so members feel
+        // every beat regardless of audio configuration.
         if (beat % bpbNow === 0) pulse(60);
         else pulse(20);
       }, 0);

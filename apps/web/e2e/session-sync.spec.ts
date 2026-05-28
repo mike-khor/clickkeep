@@ -94,16 +94,19 @@ test("owner's BPM change propagates to the member", async ({ browser }) => {
     const pageB = await ctxB.newPage();
 
     await pageA.goto('/');
+    await openSessionSheet(pageA);
     await pageA.getByRole('button', { name: CREATE_BUTTON }).click();
     const code = await readCode(pageA);
 
     await pageB.goto('/');
-    await pageB.getByLabel(CODE_LABEL).fill(code);
+    await openSessionSheet(pageB);
+    await pageB.getByLabel(CODE_LABEL, { exact: true }).fill(code);
     await pageB.getByRole('button', { name: JOIN_BUTTON }).click();
 
-    // Wait for both sides to be connected.
-    await expect(pageA.getByText(TWO_MEMBERS)).toBeVisible({ timeout: 10_000 });
-    await expect(pageB.getByText(TWO_MEMBERS)).toBeVisible({ timeout: 10_000 });
+    // Wait for both sides to be connected. Count shows in the trigger pill
+    // (always visible) — use .first() to pick whichever resolves first.
+    await expect(pageA.getByText(TWO_MEMBERS).first()).toBeVisible({ timeout: 10_000 });
+    await expect(pageB.getByText(TWO_MEMBERS).first()).toBeVisible({ timeout: 10_000 });
 
     // Owner moves the BPM slider to 137 (chosen because it isn't the default 120).
     const bpmInputA = pageA.getByLabel('BPM').first();
