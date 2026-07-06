@@ -51,6 +51,12 @@ interface MetronomeState {
   // anchor, so their clicks land on the same wall-clock instants. Null in solo.
   sessionAnchorMs: number | null;
   setSessionAnchorMs: (ms: number | null) => void;
+  // ms to add to local Date.now() so we're speaking server time. Updated
+  // continuously by the SessionClient's NTP-style pings. 0 in solo mode.
+  // Every scheduler tick reads this fresh, so a fresh estimate corrects
+  // drift within one tick (~25 ms).
+  sessionClockOffsetMs: number;
+  setSessionClockOffsetMs: (ms: number) => void;
   setBpm: (bpm: number) => void;
   setBeatsPerBar: (n: number) => void;
   setPlaying: (playing: boolean) => void;
@@ -86,6 +92,8 @@ export const useMetronome = create<MetronomeState>((set) => ({
   accentPattern: defaultPattern(DEFAULT_BEATS_PER_BAR),
   sessionAnchorMs: null,
   setSessionAnchorMs: (sessionAnchorMs) => set({ sessionAnchorMs }),
+  sessionClockOffsetMs: 0,
+  setSessionClockOffsetMs: (sessionClockOffsetMs) => set({ sessionClockOffsetMs }),
   // Floats are allowed (e.g. 120.5). Integer callers (slider, tap-tempo) still work
   // because clamp is a pure numeric operation. Display layers should call .toFixed(1).
   setBpm: (bpm) => {

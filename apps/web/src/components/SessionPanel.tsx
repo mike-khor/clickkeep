@@ -78,7 +78,10 @@ export function SessionPanel(): JSX.Element {
       // same wall-clock instant.
       let playback: { kind: 'playing'; songId: string; anchorServerTime: number } | { kind: 'stopped' };
       if (state.isPlaying) {
-        const anchor = Date.now();
+        // Stamp in server-time (Date.now() + owner's ping-derived offset) so
+        // members can auto-correct their own local drift by subtracting their
+        // offset. Same-machine loopback: offset ≈ 0, this reduces to Date.now().
+        const anchor = Date.now() + useMetronome.getState().sessionClockOffsetMs;
         useMetronome.getState().setSessionAnchorMs(anchor);
         playback = { kind: 'playing', songId: 'default', anchorServerTime: anchor };
       } else {
@@ -145,6 +148,9 @@ export function SessionPanel(): JSX.Element {
       onClockEstimate: (e) => {
         setStatus('connected');
         setRttMs(Math.round(e.rttMs));
+        // Push into the store so the click scheduler auto-corrects its
+        // Date.now() → server-time translation as fresh offsets arrive.
+        useMetronome.getState().setSessionClockOffsetMs(e.offsetMs);
       },
       onError: (errCode, msg) => {
         // On `bad-secret` during auto-rejoin: the stored owner secret is stale
@@ -240,6 +246,8 @@ export function SessionPanel(): JSX.Element {
     setRttMs(null);
     setStatus('idle');
     setSessionRole('solo');
+    useMetronome.getState().setSessionAnchorMs(null);
+    useMetronome.getState().setSessionClockOffsetMs(0);
   };
 
   const handleCopy = async (): Promise<void> => {

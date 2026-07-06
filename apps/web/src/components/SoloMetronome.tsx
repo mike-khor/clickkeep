@@ -137,13 +137,13 @@ export function SoloMetronome(): JSX.Element {
       return;
     }
     const ctx = getAudioContext();
-    // Anchor the tempo to a shared wall-clock instant (Date.now() space) so that
-    // in group mode every tab schedules beats to the same real-world moments.
-    // Members receive the owner's anchor via applyIncomingState → sessionAnchorMs;
-    // the owner stamps its own sessionAnchorMs alongside the broadcast; solo
-    // just anchors to now. Any beats already in the past get skipped inside the
-    // scheduler's audioTime guard.
-    const startAt = useMetronome.getState().sessionAnchorMs ?? Date.now();
+    // Anchor the tempo to a shared server-clock instant so every tab schedules
+    // beats to the same real-world moments even across machines. In group mode,
+    // owner and members translate through their own SessionClient-measured
+    // offset; solo mode has offset=0. Any beats already in the past get skipped
+    // inside the scheduler's audioTime guard.
+    const { sessionAnchorMs, sessionClockOffsetMs } = useMetronome.getState();
+    const startAt = sessionAnchorMs ?? Date.now() + sessionClockOffsetMs;
     const anchor: Anchor = { startAt, bpm, beatsPerBar };
     anchorRef.current = anchor;
     resetEngineStats();
@@ -185,7 +185,7 @@ export function SoloMetronome(): JSX.Element {
     if (prev === null) return;
     if (prev.bpm === bpm && prev.beatsPerBar === beatsPerBar) return;
 
-    const now = Date.now();
+    const now = Date.now() + useMetronome.getState().sessionClockOffsetMs;
     const oldPeriodMs = 60_000 / prev.bpm;
     // Time of the next beat boundary at the old tempo.
     const elapsed = now - prev.startAt;
@@ -358,7 +358,9 @@ function startScheduler(
   const tempo = [{ startAt: anchor.startAt, bpm: anchor.bpm, beatsPerBar: anchor.beatsPerBar }];
   return startClick(tempo, {
     audioCtx: ctx,
-    nowServerMs: () => Date.now(),
+    // Read the offset from the store on every tick so a fresh ping estimate
+    // (every 30 s + burst at connect) auto-corrects clock drift within one tick.
+    nowServerMs: () => Date.now() + useMetronome.getState().sessionClockOffsetMs,
     // Closures so a profile or pattern change takes effect on the very next
     // scheduled beat without tearing down and restarting the engine.
     voice: (args) => getVoice(toneProfileRef.current)(args),
