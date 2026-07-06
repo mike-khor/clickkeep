@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { SessionClient } from '../lib/session-client.js';
 import { useMetronome, type SessionRole } from '../lib/store.js';
-import type { SessionState } from '@clickkeep/sync-core';
+import type { BeatState, SessionState } from '@clickkeep/sync-core';
 import {
   clearHash,
   forgetOwnerSecret,
@@ -69,8 +69,18 @@ export function SessionPanel(): JSX.Element {
   // fields actually change.
   useEffect(() => {
     if (client === null) return;
-    let last: { bpm: number; beatsPerBar: number; isPlaying: boolean } | null = null;
-    const send = (state: { bpm: number; beatsPerBar: number; isPlaying: boolean }): void => {
+    let last: {
+      bpm: number;
+      beatsPerBar: number;
+      isPlaying: boolean;
+      accentPatternKey: string;
+    } | null = null;
+    const send = (state: {
+      bpm: number;
+      beatsPerBar: number;
+      isPlaying: boolean;
+      accentPattern: readonly BeatState[];
+    }): void => {
       // Single-song "default" until Concert Mode lands; the worker stamps
       // sessionId + version, we just supply the slice that changed.
       // The owner stamps its own sessionAnchorMs to the same value it broadcasts,
@@ -93,6 +103,7 @@ export function SessionPanel(): JSX.Element {
           id: 'default',
           title: 'Untitled',
           tempo: [{ startAt: 0, bpm: state.bpm, beatsPerBar: state.beatsPerBar }],
+          accentPattern: [...state.accentPattern],
         },
       ];
       client.send({ t: 'set-state', state: { playback, setlist } });
@@ -102,17 +113,29 @@ export function SessionPanel(): JSX.Element {
         last = null;
         return;
       }
-      const snap = { bpm: s.bpm, beatsPerBar: s.beatsPerBar, isPlaying: s.isPlaying };
+      const accentPatternKey = s.accentPattern.join(',');
+      const snap = {
+        bpm: s.bpm,
+        beatsPerBar: s.beatsPerBar,
+        isPlaying: s.isPlaying,
+        accentPatternKey,
+      };
       if (
         last !== null &&
         last.bpm === snap.bpm &&
         last.beatsPerBar === snap.beatsPerBar &&
-        last.isPlaying === snap.isPlaying
+        last.isPlaying === snap.isPlaying &&
+        last.accentPatternKey === snap.accentPatternKey
       ) {
         return;
       }
       last = snap;
-      send(snap);
+      send({
+        bpm: s.bpm,
+        beatsPerBar: s.beatsPerBar,
+        isPlaying: s.isPlaying,
+        accentPattern: s.accentPattern,
+      });
     });
     return unsub;
   }, [client]);
@@ -122,17 +145,35 @@ export function SessionPanel(): JSX.Element {
     // echoed state — applying it would re-trigger the broadcast effect above
     // and bounce a fresh anchorServerTime back out for no reason.
     if (useMetronome.getState().sessionRole !== 'member') return;
-    const first = state.setlist[0]?.tempo[0];
+    const song = state.setlist[0];
+    const first = song?.tempo[0];
     if (first === undefined) return;
     const isPlaying = state.playback.kind === 'playing';
     const sessionAnchorMs =
       state.playback.kind === 'playing' ? state.playback.anchorServerTime : null;
-    useMetronome.setState({
+    // Old wire-format clients (or a song without a pattern) fall back to the
+    // owner's beat-count with accent-on-downbeat. Length-mismatch on the wire
+    // is treated as "not a valid pattern for this bar" and we skip applying it.
+    const wireAccentPattern = song?.accentPattern;
+    const patch: Partial<{
+      bpm: number;
+      beatsPerBar: number;
+      isPlaying: boolean;
+      sessionAnchorMs: number | null;
+      accentPattern: BeatState[];
+    }> = {
       bpm: first.bpm,
       beatsPerBar: first.beatsPerBar,
       isPlaying,
       sessionAnchorMs,
-    });
+    };
+    if (
+      wireAccentPattern !== undefined &&
+      wireAccentPattern.length === first.beatsPerBar
+    ) {
+      patch.accentPattern = [...wireAccentPattern];
+    }
+    useMetronome.setState(patch);
   };
 
   const connect = (codeToUse: string, ownerSecret: string | null): void => {

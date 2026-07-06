@@ -14,11 +14,21 @@ export interface TempoSegment {
   beatsPerBar: number;
 }
 
+/**
+ * Per-beat accent map for a bar. Length matches the current bar's
+ * `beatsPerBar`; index 0 is the downbeat. Optional on the wire for
+ * back-compat with older clients — absent means "default to accent on
+ * downbeat, normal elsewhere".
+ */
+export type BeatState = 'accent' | 'normal' | 'mute';
+
 export interface SongState {
   id: string;
   title: string;
   /** Ordered tempo segments. The first segment's `startAt` is the song's downbeat zero. */
   tempo: TempoSegment[];
+  /** Optional per-beat accent pattern; omit to fall back to accent-on-downbeat. */
+  accentPattern?: BeatState[];
 }
 
 export interface SessionState {
