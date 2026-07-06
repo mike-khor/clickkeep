@@ -84,9 +84,18 @@ export function SessionPanel(): JSX.Element {
     const send = (state: { bpm: number; beatsPerBar: number; isPlaying: boolean }): void => {
       // Single-song "default" until Concert Mode lands; the worker stamps
       // sessionId + version, we just supply the slice that changed.
-      const playback = state.isPlaying
-        ? { kind: 'playing' as const, songId: 'default', anchorServerTime: Date.now() }
-        : { kind: 'stopped' as const };
+      // The owner stamps its own sessionAnchorMs to the same value it broadcasts,
+      // so its local scheduler and every member's scheduler anchor beat 0 to the
+      // same wall-clock instant.
+      let playback: { kind: 'playing'; songId: string; anchorServerTime: number } | { kind: 'stopped' };
+      if (state.isPlaying) {
+        const anchor = Date.now();
+        useMetronome.getState().setSessionAnchorMs(anchor);
+        playback = { kind: 'playing', songId: 'default', anchorServerTime: anchor };
+      } else {
+        useMetronome.getState().setSessionAnchorMs(null);
+        playback = { kind: 'stopped' };
+      }
       const setlist = [
         {
           id: 'default',
@@ -124,10 +133,13 @@ export function SessionPanel(): JSX.Element {
     const first = state.setlist[0]?.tempo[0];
     if (first === undefined) return;
     const isPlaying = state.playback.kind === 'playing';
+    const sessionAnchorMs =
+      state.playback.kind === 'playing' ? state.playback.anchorServerTime : null;
     useMetronome.setState({
       bpm: first.bpm,
       beatsPerBar: first.beatsPerBar,
       isPlaying,
+      sessionAnchorMs,
     });
   };
 

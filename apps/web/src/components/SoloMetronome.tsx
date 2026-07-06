@@ -137,8 +137,13 @@ export function SoloMetronome(): JSX.Element {
       return;
     }
     const ctx = getAudioContext();
-    // Solo mode anchors the tempo map at "now". Server time === local time here.
-    const startAt = performance.now();
+    // Anchor the tempo to a shared wall-clock instant (Date.now() space) so that
+    // in group mode every tab schedules beats to the same real-world moments.
+    // Members receive the owner's anchor via applyIncomingState → sessionAnchorMs;
+    // the owner stamps its own sessionAnchorMs alongside the broadcast; solo
+    // just anchors to now. Any beats already in the past get skipped inside the
+    // scheduler's audioTime guard.
+    const startAt = useMetronome.getState().sessionAnchorMs ?? Date.now();
     const anchor: Anchor = { startAt, bpm, beatsPerBar };
     anchorRef.current = anchor;
     resetEngineStats();
@@ -180,7 +185,7 @@ export function SoloMetronome(): JSX.Element {
     if (prev === null) return;
     if (prev.bpm === bpm && prev.beatsPerBar === beatsPerBar) return;
 
-    const now = performance.now();
+    const now = Date.now();
     const oldPeriodMs = 60_000 / prev.bpm;
     // Time of the next beat boundary at the old tempo.
     const elapsed = now - prev.startAt;
@@ -353,7 +358,7 @@ function startScheduler(
   const tempo = [{ startAt: anchor.startAt, bpm: anchor.bpm, beatsPerBar: anchor.beatsPerBar }];
   return startClick(tempo, {
     audioCtx: ctx,
-    nowServerMs: () => performance.now(),
+    nowServerMs: () => Date.now(),
     // Closures so a profile or pattern change takes effect on the very next
     // scheduled beat without tearing down and restarting the engine.
     voice: (args) => getVoice(toneProfileRef.current)(args),

@@ -45,6 +45,12 @@ interface MetronomeState {
   // Per-beat accent pattern. Length always === beatsPerBar; index 0 is the
   // downbeat. Resized in setBeatsPerBar to preserve existing entries.
   accentPattern: BeatState[];
+  // Shared wall-clock instant that beat 0 anchors to (ms since epoch). In group
+  // mode this is broadcast by the owner (Date.now() at play-press) and set by
+  // the member's applyIncomingState — both tabs schedule against the same
+  // anchor, so their clicks land on the same wall-clock instants. Null in solo.
+  sessionAnchorMs: number | null;
+  setSessionAnchorMs: (ms: number | null) => void;
   setBpm: (bpm: number) => void;
   setBeatsPerBar: (n: number) => void;
   setPlaying: (playing: boolean) => void;
@@ -78,6 +84,8 @@ export const useMetronome = create<MetronomeState>((set) => ({
   tempoMapName: null,
   toneProfile: 'pitched',
   accentPattern: defaultPattern(DEFAULT_BEATS_PER_BAR),
+  sessionAnchorMs: null,
+  setSessionAnchorMs: (sessionAnchorMs) => set({ sessionAnchorMs }),
   // Floats are allowed (e.g. 120.5). Integer callers (slider, tap-tempo) still work
   // because clamp is a pure numeric operation. Display layers should call .toFixed(1).
   setBpm: (bpm) => {
