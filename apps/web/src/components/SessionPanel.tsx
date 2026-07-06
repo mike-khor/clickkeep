@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { SessionClient } from '../lib/session-client.js';
 import { useMetronome } from '../lib/store.js';
+import type { SessionState } from '@clickkeep/sync-core';
 import {
   clearHash,
   forgetOwnerSecret,
@@ -55,6 +56,67 @@ export function SessionPanel(): JSX.Element {
     };
   }, [setSessionRole]);
 
+  // Owner broadcasts local store changes (BPM / signature / play-stop) to the
+  // worker so members follow. We subscribe to the store directly instead of
+  // listing bpm / beatsPerBar / isPlaying in the effect deps so the
+  // subscription is set up once per session and isn't re-created on every
+  // keystroke. The `last` snapshot dedupes: zustand fires `subscribe` on
+  // every store update (including the per-beat `setCurrentBeat` from the
+  // click scheduler), but we only want a wire message when the owner-driven
+  // fields actually change.
+  useEffect(() => {
+    if (client === null) return;
+    let last: { bpm: number; beatsPerBar: number; isPlaying: boolean } | null = null;
+    const send = (state: { bpm: number; beatsPerBar: number; isPlaying: boolean }): void => {
+      // Single-song "default" until Concert Mode lands; the worker stamps
+      // sessionId + version, we just supply the slice that changed.
+      const playback = state.isPlaying
+        ? { kind: 'playing' as const, songId: 'default', anchorServerTime: Date.now() }
+        : { kind: 'stopped' as const };
+      const setlist = [
+        {
+          id: 'default',
+          title: 'Untitled',
+          tempo: [{ startAt: 0, bpm: state.bpm, beatsPerBar: state.beatsPerBar }],
+        },
+      ];
+      client.send({ t: 'set-state', state: { playback, setlist } });
+    };
+    const unsub = useMetronome.subscribe((s) => {
+      if (s.sessionRole !== 'owner') {
+        last = null;
+        return;
+      }
+      const snap = { bpm: s.bpm, beatsPerBar: s.beatsPerBar, isPlaying: s.isPlaying };
+      if (
+        last !== null &&
+        last.bpm === snap.bpm &&
+        last.beatsPerBar === snap.beatsPerBar &&
+        last.isPlaying === snap.isPlaying
+      ) {
+        return;
+      }
+      last = snap;
+      send(snap);
+    });
+    return unsub;
+  }, [client]);
+
+  const applyIncomingState = (state: SessionState): void => {
+    // Members mirror the owner's tempo and play state. Owners ignore their own
+    // echoed state — applying it would re-trigger the broadcast effect above
+    // and bounce a fresh anchorServerTime back out for no reason.
+    if (useMetronome.getState().sessionRole !== 'member') return;
+    const first = state.setlist[0]?.tempo[0];
+    if (first === undefined) return;
+    const isPlaying = state.playback.kind === 'playing';
+    useMetronome.setState({
+      bpm: first.bpm,
+      beatsPerBar: first.beatsPerBar,
+      isPlaying,
+    });
+  };
+
   const connect = (codeToUse: string, ownerSecret: string | null): void => {
     setStatus('connecting');
     // Optimistically reflect the intended role; the worker is the final word —
@@ -63,9 +125,7 @@ export function SessionPanel(): JSX.Element {
     const wsScheme = WORKER_URL.startsWith('https') ? 'wss' : 'ws';
     const wsUrl = `${WORKER_URL.replace(/^https?/, wsScheme)}/sessions/${codeToUse}/ws`;
     const c = new SessionClient(wsUrl, ownerSecret, {
-      onState: () => {
-        /* state handling lands with Concert Mode work */
-      },
+      onState: applyIncomingState,
       onMemberCount: setMemberCount,
       onClockEstimate: (e) => {
         setStatus('connected');
