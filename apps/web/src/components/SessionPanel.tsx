@@ -52,23 +52,12 @@ export function SessionPanel(): JSX.Element {
   // clear the URL on every error: transient socket failures and `bad-secret`
   // both still leave a live session the user can re-join as a member.
   const autoConnectCodeRef = useRef<string | null>(null);
-  // StrictMode double-runs the mount effect; this guard makes sure we don't
-  // open two WebSockets to the same session on the first render.
-  const didAutoConnectRef = useRef(false);
 
   useEffect(() => {
     return () => {
       client?.close();
     };
   }, [client]);
-
-  // Whenever the panel unmounts entirely (route change, app teardown), drop
-  // back to solo so a stale 'member' flag can't outlive the connection.
-  useEffect(() => {
-    return () => {
-      setSessionRole('solo');
-    };
-  }, [setSessionRole]);
 
   // Owner broadcasts local store changes (BPM / signature / play-stop) to the
   // worker so members follow. We subscribe to the store directly instead of
@@ -191,8 +180,6 @@ export function SessionPanel(): JSX.Element {
   // If sessionStorage also has the matching owner secret, we'll reclaim owner
   // status — otherwise we join as a member.
   useEffect(() => {
-    if (didAutoConnectRef.current) return;
-    didAutoConnectRef.current = true;
     const codeFromUrl = readCodeFromHash();
     if (codeFromUrl === null) return;
     const credential = recallOwnerSecret(codeFromUrl);
