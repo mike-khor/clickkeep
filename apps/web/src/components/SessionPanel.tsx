@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { SessionClient } from '../lib/session-client.js';
 import { useMetronome, type SessionRole } from '../lib/store.js';
-import type { SessionState } from '@clickkeep/sync-core';
+import type { BeatState, SessionState } from '@clickkeep/sync-core';
 import {
   clearHash,
   forgetOwnerSecret,
@@ -52,23 +52,12 @@ export function SessionPanel(): JSX.Element {
   // clear the URL on every error: transient socket failures and `bad-secret`
   // both still leave a live session the user can re-join as a member.
   const autoConnectCodeRef = useRef<string | null>(null);
-  // StrictMode double-runs the mount effect; this guard makes sure we don't
-  // open two WebSockets to the same session on the first render.
-  const didAutoConnectRef = useRef(false);
 
   useEffect(() => {
     return () => {
       client?.close();
     };
   }, [client]);
-
-  // Whenever the panel unmounts entirely (route change, app teardown), drop
-  // back to solo so a stale 'member' flag can't outlive the connection.
-  useEffect(() => {
-    return () => {
-      setSessionRole('solo');
-    };
-  }, [setSessionRole]);
 
   // Owner broadcasts local store changes (BPM / signature / play-stop) to the
   // worker so members follow. We subscribe to the store directly instead of
@@ -80,18 +69,41 @@ export function SessionPanel(): JSX.Element {
   // fields actually change.
   useEffect(() => {
     if (client === null) return;
-    let last: { bpm: number; beatsPerBar: number; isPlaying: boolean } | null = null;
-    const send = (state: { bpm: number; beatsPerBar: number; isPlaying: boolean }): void => {
+    let last: {
+      bpm: number;
+      beatsPerBar: number;
+      isPlaying: boolean;
+      accentPatternKey: string;
+    } | null = null;
+    const send = (state: {
+      bpm: number;
+      beatsPerBar: number;
+      isPlaying: boolean;
+      accentPattern: readonly BeatState[];
+    }): void => {
       // Single-song "default" until Concert Mode lands; the worker stamps
       // sessionId + version, we just supply the slice that changed.
-      const playback = state.isPlaying
-        ? { kind: 'playing' as const, songId: 'default', anchorServerTime: Date.now() }
-        : { kind: 'stopped' as const };
+      // The owner stamps its own sessionAnchorMs to the same value it broadcasts,
+      // so its local scheduler and every member's scheduler anchor beat 0 to the
+      // same wall-clock instant.
+      let playback: { kind: 'playing'; songId: string; anchorServerTime: number } | { kind: 'stopped' };
+      if (state.isPlaying) {
+        // Stamp in server-time (Date.now() + owner's ping-derived offset) so
+        // members can auto-correct their own local drift by subtracting their
+        // offset. Same-machine loopback: offset ≈ 0, this reduces to Date.now().
+        const anchor = Date.now() + useMetronome.getState().sessionClockOffsetMs;
+        useMetronome.getState().setSessionAnchorMs(anchor);
+        playback = { kind: 'playing', songId: 'default', anchorServerTime: anchor };
+      } else {
+        useMetronome.getState().setSessionAnchorMs(null);
+        playback = { kind: 'stopped' };
+      }
       const setlist = [
         {
           id: 'default',
           title: 'Untitled',
           tempo: [{ startAt: 0, bpm: state.bpm, beatsPerBar: state.beatsPerBar }],
+          accentPattern: [...state.accentPattern],
         },
       ];
       client.send({ t: 'set-state', state: { playback, setlist } });
@@ -101,17 +113,29 @@ export function SessionPanel(): JSX.Element {
         last = null;
         return;
       }
-      const snap = { bpm: s.bpm, beatsPerBar: s.beatsPerBar, isPlaying: s.isPlaying };
+      const accentPatternKey = s.accentPattern.join(',');
+      const snap = {
+        bpm: s.bpm,
+        beatsPerBar: s.beatsPerBar,
+        isPlaying: s.isPlaying,
+        accentPatternKey,
+      };
       if (
         last !== null &&
         last.bpm === snap.bpm &&
         last.beatsPerBar === snap.beatsPerBar &&
-        last.isPlaying === snap.isPlaying
+        last.isPlaying === snap.isPlaying &&
+        last.accentPatternKey === snap.accentPatternKey
       ) {
         return;
       }
       last = snap;
-      send(snap);
+      send({
+        bpm: s.bpm,
+        beatsPerBar: s.beatsPerBar,
+        isPlaying: s.isPlaying,
+        accentPattern: s.accentPattern,
+      });
     });
     return unsub;
   }, [client]);
@@ -121,14 +145,35 @@ export function SessionPanel(): JSX.Element {
     // echoed state — applying it would re-trigger the broadcast effect above
     // and bounce a fresh anchorServerTime back out for no reason.
     if (useMetronome.getState().sessionRole !== 'member') return;
-    const first = state.setlist[0]?.tempo[0];
+    const song = state.setlist[0];
+    const first = song?.tempo[0];
     if (first === undefined) return;
     const isPlaying = state.playback.kind === 'playing';
-    useMetronome.setState({
+    const sessionAnchorMs =
+      state.playback.kind === 'playing' ? state.playback.anchorServerTime : null;
+    // Old wire-format clients (or a song without a pattern) fall back to the
+    // owner's beat-count with accent-on-downbeat. Length-mismatch on the wire
+    // is treated as "not a valid pattern for this bar" and we skip applying it.
+    const wireAccentPattern = song?.accentPattern;
+    const patch: Partial<{
+      bpm: number;
+      beatsPerBar: number;
+      isPlaying: boolean;
+      sessionAnchorMs: number | null;
+      accentPattern: BeatState[];
+    }> = {
       bpm: first.bpm,
       beatsPerBar: first.beatsPerBar,
       isPlaying,
-    });
+      sessionAnchorMs,
+    };
+    if (
+      wireAccentPattern !== undefined &&
+      wireAccentPattern.length === first.beatsPerBar
+    ) {
+      patch.accentPattern = [...wireAccentPattern];
+    }
+    useMetronome.setState(patch);
   };
 
   const connect = (codeToUse: string, ownerSecret: string | null): void => {
@@ -144,6 +189,9 @@ export function SessionPanel(): JSX.Element {
       onClockEstimate: (e) => {
         setStatus('connected');
         setRttMs(Math.round(e.rttMs));
+        // Push into the store so the click scheduler auto-corrects its
+        // Date.now() → server-time translation as fresh offsets arrive.
+        useMetronome.getState().setSessionClockOffsetMs(e.offsetMs);
       },
       onError: (errCode, msg) => {
         // On `bad-secret` during auto-rejoin: the stored owner secret is stale
@@ -179,8 +227,6 @@ export function SessionPanel(): JSX.Element {
   // If sessionStorage also has the matching owner secret, we'll reclaim owner
   // status — otherwise we join as a member.
   useEffect(() => {
-    if (didAutoConnectRef.current) return;
-    didAutoConnectRef.current = true;
     const codeFromUrl = readCodeFromHash();
     if (codeFromUrl === null) return;
     const credential = recallOwnerSecret(codeFromUrl);
@@ -241,6 +287,8 @@ export function SessionPanel(): JSX.Element {
     setRttMs(null);
     setStatus('idle');
     setSessionRole('solo');
+    useMetronome.getState().setSessionAnchorMs(null);
+    useMetronome.getState().setSessionClockOffsetMs(0);
   };
 
   const handleCopy = async (): Promise<void> => {

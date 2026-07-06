@@ -27,6 +27,11 @@ export class SessionClient {
   private isOwner = false;
   private ownerSecret: string | null;
   private events: SessionClientEvents;
+  // Set true when the caller explicitly closes (leave / effect teardown /
+  // StrictMode remount). The browser's WS close event fires asynchronously, so
+  // without this flag a client we've already replaced would still fire onClose
+  // → setSessionRole('solo'), clobbering the new client's role.
+  private closedByCaller = false;
 
   constructor(url: string, ownerSecret: string | null, events: SessionClientEvents) {
     this.events = events;
@@ -35,7 +40,10 @@ export class SessionClient {
     this.socket.addEventListener('open', () => this.onOpen());
     this.socket.addEventListener('message', (e) => this.onMessage(e));
     this.socket.addEventListener('close', () => this.onClose());
-    this.socket.addEventListener('error', () => this.events.onError('socket', 'WebSocket error'));
+    this.socket.addEventListener('error', () => {
+      if (this.closedByCaller) return;
+      this.events.onError('socket', 'WebSocket error');
+    });
   }
 
   private onOpen(): void {
@@ -51,6 +59,7 @@ export class SessionClient {
 
   private onClose(): void {
     if (this.pingTimer !== null) clearInterval(this.pingTimer);
+    if (this.closedByCaller) return;
     this.events.onClose();
   }
 
@@ -105,6 +114,7 @@ export class SessionClient {
   }
 
   close(): void {
+    this.closedByCaller = true;
     this.socket.close();
   }
 
