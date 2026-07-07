@@ -13,12 +13,8 @@ import {
 import { COPY } from '../copy/strings.js';
 import { Sheet } from './Sheet.js';
 import { MemberActivityLog } from './MemberActivityLog.js';
-import {
-  appendActivityEvent,
-  getStoredActivityEnabled,
-  setStoredActivityEnabled,
-  type ActivityEvent,
-} from '../lib/session-activity.js';
+import { useMemberActivityLog } from '../hooks/useMemberActivityLog.js';
+import type { ActivityEvent } from '../lib/session-activity.js';
 
 const WORKER_URL = (import.meta.env.VITE_SESSION_WORKER_URL as string | undefined) ?? 'http://localhost:8787';
 
@@ -53,16 +49,20 @@ export function SessionPanel(): JSX.Element {
   const [copied, setCopied] = useState(false);
   const setSessionRole = useMetronome((s) => s.setSessionRole);
   const sessionRole = useMetronome((s) => s.sessionRole);
-  // Owner-only, opt-in join/leave log derived from member-count deltas. See
-  // lib/session-activity.ts. Hidden entirely from members (gated below by
-  // sessionRole) and collapsed by default even for owners (activityEnabled
-  // persists the owner's own reveal preference across reloads).
-  const [activityLog, setActivityLog] = useState<ActivityEvent[]>([]);
-  const [activityEnabled, setActivityEnabled] = useState<boolean>(() => getStoredActivityEnabled());
-  // The count seen just before the most recent onMemberCount call. Null means
-  // "no baseline yet for this connection" so the first count after connecting
-  // never logs a spurious join/leave event.
-  const prevMemberCountRef = useRef<number | null>(null);
+  // Bumped once per `connect()` call so the activity-log hook can tell fresh
+  // connections apart (even a rejoin to the same code produces a new nonce)
+  // and reset its baseline / clear its log without SessionPanel having to
+  // remember to do so at every reset seam.
+  const [connectionNonce, setConnectionNonce] = useState(0);
+  // Owner-only, opt-in join/leave log derived from member-count deltas. The
+  // hook owns the baseline ref, the log state, and the localStorage-backed
+  // opt-in — see hooks/useMemberActivityLog.ts. Hidden entirely from members
+  // (gated below by sessionRole).
+  const {
+    events: activityLog,
+    enabled: activityEnabled,
+    onToggle: handleToggleActivity,
+  } = useMemberActivityLog(memberCount, connectionNonce === 0 ? null : `conn-${connectionNonce}`);
   // Tracks the code of the connection we *automatically* started from the URL
   // on mount. Used to decide whether to drop a stale owner secret when the
   // worker rejects the auto-rejoin's `claim-owner`. We deliberately do NOT
@@ -198,17 +198,15 @@ export function SessionPanel(): JSX.Element {
     // Optimistically reflect the intended role; the worker is the final word —
     // if it rejects ownership (claim-owner failure) onError will flip us back.
     setSessionRole(ownerSecret !== null ? 'owner' : 'member');
-    // Fresh connection, fresh log: don't carry a previous session's join/leave
-    // history over, and don't diff the first count we see against a stale one.
-    prevMemberCountRef.current = null;
-    setActivityLog([]);
+    // Fresh connection: bump the nonce so useMemberActivityLog resets its
+    // baseline and clears the log. Works even when re-joining the same code
+    // (the nonce is what changes, not the code).
+    setConnectionNonce((n) => n + 1);
     const wsScheme = WORKER_URL.startsWith('https') ? 'wss' : 'ws';
     const wsUrl = `${WORKER_URL.replace(/^https?/, wsScheme)}/sessions/${codeToUse}/ws`;
     const c = new SessionClient(wsUrl, ownerSecret, {
       onState: applyIncomingState,
       onMemberCount: (n) => {
-        setActivityLog((log) => appendActivityEvent(log, prevMemberCountRef.current, n));
-        prevMemberCountRef.current = n;
         setMemberCount(n);
       },
       onClockEstimate: (e) => {
@@ -312,8 +310,9 @@ export function SessionPanel(): JSX.Element {
     setRttMs(null);
     setStatus('idle');
     setSessionRole('solo');
-    setActivityLog([]);
-    prevMemberCountRef.current = null;
+    // Nonce back to 0 → useMemberActivityLog treats connectionKey as null,
+    // resets baseline, clears the log.
+    setConnectionNonce(0);
     useMetronome.getState().setSessionAnchorMs(null);
     useMetronome.getState().setSessionClockOffsetMs(0);
   };
@@ -343,14 +342,6 @@ export function SessionPanel(): JSX.Element {
     } catch {
       // User cancelled or the API isn't available — nothing to surface.
     }
-  };
-
-  const handleToggleActivity = (): void => {
-    setActivityEnabled((prev) => {
-      const next = !prev;
-      setStoredActivityEnabled(next);
-      return next;
-    });
   };
 
   const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';

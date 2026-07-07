@@ -5,7 +5,10 @@
 // left. We can't (yet) say who.
 //
 // This module is deliberately framework-free so the delta-tracking logic is
-// testable without mounting SessionPanel.
+// testable without mounting SessionPanel. The React-side wiring (baseline
+// reset on reconnect, opt-in preference, memoized derivation) lives in
+// hooks/useMemberActivityLog.ts. The opt-in localStorage preference itself
+// lives in lib/output-prefs.ts alongside the other per-user UI toggles.
 
 export interface ActivityEvent {
   id: number;
@@ -17,28 +20,6 @@ export interface ActivityEvent {
 }
 
 const MAX_EVENTS = 50;
-const ENABLED_KEY = 'clickkeep:session-activity:enabled';
-
-/** Opt-in preference: owner must explicitly reveal the log. Default OFF so the
- * session sheet stays exactly as busy as it is today for everyone who doesn't
- * ask for this. localStorage is best-effort, same pattern as output-prefs.ts. */
-export function getStoredActivityEnabled(): boolean {
-  try {
-    return localStorage.getItem(ENABLED_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-export function setStoredActivityEnabled(v: boolean): void {
-  try {
-    localStorage.setItem(ENABLED_KEY, v ? '1' : '0');
-  } catch {
-    // Persistence is best-effort.
-  }
-}
-
-let nextEventId = 1;
 
 /**
  * Given the existing log and a freshly-received member count, returns the
@@ -47,6 +28,10 @@ let nextEventId = 1;
  * count seen after connecting) — we deliberately do NOT log an event for it,
  * since there's no prior count to diff against and we'd otherwise report a
  * false "N members joined" the instant anyone connects.
+ *
+ * Event ids are derived from the tail of the log (last id + 1) rather than a
+ * module-level counter, so tests and re-mounts see fresh, order-independent
+ * ids without needing to reset any hidden state.
  */
 export function appendActivityEvent(
   log: readonly ActivityEvent[],
@@ -57,16 +42,21 @@ export function appendActivityEvent(
   if (previousCount === null || nextCount === previousCount) return log as ActivityEvent[];
   const delta = Math.abs(nextCount - previousCount);
   const kind: ActivityEvent['kind'] = nextCount > previousCount ? 'joined' : 'left';
-  const next = [...log, { id: nextEventId++, kind, delta, atMs }];
+  const nextId = (log[log.length - 1]?.id ?? 0) + 1;
+  const next = [...log, { id: nextId, kind, delta, atMs }];
   return next.length > MAX_EVENTS ? next.slice(next.length - MAX_EVENTS) : next;
 }
 
-/** HH:MM (24h, local time) — an absolute clock reading is simpler than a
- * relative "Ns ago" label because it never needs a re-render timer to stay
- * accurate while the sheet is open. */
+// Cached at module load — Intl.DateTimeFormat is expensive to construct on
+// every render, and cheap once built.
+const TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  hour: 'numeric',
+  minute: '2-digit',
+});
+
+/** A short absolute clock reading in the user's locale (e.g. "9:05 AM" or
+ * "09:05"). Absolute time is simpler than a relative "Ns ago" label because it
+ * never needs a re-render timer to stay accurate while the sheet is open. */
 export function formatActivityTime(atMs: number): string {
-  const d = new Date(atMs);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${hh}:${mm}`;
+  return TIME_FORMATTER.format(new Date(atMs));
 }
