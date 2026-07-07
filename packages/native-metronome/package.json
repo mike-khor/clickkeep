@@ -26,10 +26,12 @@
     }
   },
   "peerDependencies": {
-    "@capacitor/core": "^7.0.0"
+    "@capacitor/core": "^7.0.0",
+    "@clickkeep/click-engine": "workspace:*"
   },
   "devDependencies": {
     "@capacitor/core": "^7.0.0",
+    "@clickkeep/click-engine": "workspace:*",
     "typescript": "^5.6.3"
   }
 }

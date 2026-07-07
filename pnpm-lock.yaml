@@ -101,6 +101,9 @@ importers:
       '@capacitor/core':
         specifier: ^7.0.0
         version: 7.6.7
+      '@clickkeep/click-engine':
+        specifier: workspace:*
+        version: link:../click-engine
       typescript:
         specifier: ^5.6.3
         version: 5.9.3

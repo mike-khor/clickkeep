@@ -9,7 +9,11 @@
  * Solo-mode only. Group sessions get the current tempo pushed through the
  * existing Zustand store, so `updateTempo` is enough to stay in step.
  */
-export type BeatState = 'accent' | 'normal' | 'mute';
+// Re-exported from the click-engine so the native plugin, the Web Audio
+// scheduler, and the accent-pattern UI all agree on the vocabulary. Using
+// `import type` keeps this a zero-cost dependency at build time.
+import type { BeatState } from '@clickkeep/click-engine';
+export type { BeatState };
 
 export interface StartOptions {
   /** Beats per minute. Clamped inside the native side to [30, 300]. */

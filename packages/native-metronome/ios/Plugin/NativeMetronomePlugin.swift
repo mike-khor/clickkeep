@@ -7,9 +7,11 @@ import AVFoundation
 /// the foreground, so we hand the click over to AVAudioEngine and drive
 /// it from a DispatchSourceTimer on a dedicated high-priority queue.
 ///
-/// AVAudioSession is configured to `.playback` at app launch (see
-/// `AppDelegate.swift`) and `UIBackgroundModes` includes `audio`, so
-/// AVAudioEngine keeps producing sound in the background.
+/// AVAudioSession is configured to `.playback` with `.mixWithOthers` inside
+/// `beginScheduling` — we deliberately claim the session only when the user
+/// actually starts the metronome, so a concurrent recording app is not
+/// blocked at app launch. Paired with `UIBackgroundModes = ["audio"]` in
+/// Info.plist, this keeps AVAudioEngine producing sound in the background.
 @objc(NativeMetronomePlugin)
 public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "NativeMetronomePlugin"
@@ -46,9 +48,28 @@ public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
     private var beatsPerBar: Int = 4
     private var accentPattern: [String]? = nil
     private var beatIndex: Int = 0
+    /// True between `beginScheduling` and `endScheduling`. Used by the
+    /// interruption handler to decide whether to auto-resume when audio
+    /// becomes available again.
+    private var isScheduling: Bool = false
 
-    // Reentrancy guard for start/stop against the timer callback.
-    private let stateLock = NSLock()
+    // MARK: - Plugin lifecycle
+
+    public override func load() {
+        // Observe audio-session interruptions (phone calls, Siri, other apps
+        // taking exclusive audio). Registered once per plugin lifetime; the
+        // handler dispatches onto `timerQueue` for state mutation.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAudioSessionInterruption(_:)),
+            name: AVAudioSession.interruptionNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
 
     // MARK: - Plugin methods
 
@@ -120,11 +141,20 @@ public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
         accentPattern: [String]?,
         anchorEpochMs: Double?
     ) throws {
-        stateLock.lock()
-        defer { stateLock.unlock() }
+        // All mutation runs on timerQueue — the serial queue is the sole synchronization mechanism.
 
         let clampedBpm = max(30.0, min(300.0, bpm))
         let clampedBeats = max(1, min(16, beatsPerBar))
+
+        // Claim the audio session lazily. Failure is non-fatal — we still try
+        // to start the engine; the user gets audio if iOS lets us have it.
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try session.setActive(true)
+        } catch {
+            NSLog("ClickKeep native metronome: failed to configure AVAudioSession: \(error)")
+        }
 
         try ensureAudioReady()
 
@@ -143,8 +173,8 @@ public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
         // because `beatIndex % beatsPerBar` (or the accent pattern lookup)
         // uses the anchor-derived beat number. On foreground handoff the
         // Web Audio scheduler re-locks to the true grid.
-        let periodMs = 60_000.0 / clampedBpm
         if let anchor = anchorEpochMs, anchor.isFinite {
+            let periodMs = 60_000.0 / clampedBpm
             let nowMs = Date().timeIntervalSince1970 * 1000
             let elapsed = nowMs - anchor
             let nearestBeatFloat = (elapsed / periodMs).rounded()
@@ -153,20 +183,26 @@ public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
             self.beatIndex = 0
         }
 
-        restartTimer(initialDelayMs: 0)
+        self.isScheduling = true
+        restartTimer()
     }
 
     private func endScheduling() {
-        stateLock.lock()
-        defer { stateLock.unlock() }
+        // All mutation runs on timerQueue — the serial queue is the sole synchronization mechanism.
 
         timer?.cancel()
         timer = nil
+        isScheduling = false
 
         accentPlayer.stop()
         normalPlayer.stop()
         // Keep the engine around — cheaper to keep it warm for the next
         // start() than to tear it down. Stopping the players stops audio.
+
+        // Release the audio session so other apps regain audio control when
+        // the metronome stops. `.notifyOthersOnDeactivation` lets a paused
+        // music app resume automatically.
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     private func ensureAudioReady() throws {
@@ -222,23 +258,18 @@ public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     /// Cancel any existing timer and start a new one at the current BPM.
-    /// Must be called from `timerQueue` (or with `stateLock` held).
-    /// `initialDelayMs` delays the FIRST tick — subsequent ticks then fire at
-    /// the natural beat period. Pass 0 to start immediately.
-    private func restartTimer(initialDelayMs: Double) {
+    /// Must be called from `timerQueue`. The first tick fires immediately —
+    /// callers seed `beatIndex` beforehand so the accent lands on the right
+    /// beat position in the bar.
+    private func restartTimer() {
         timer?.cancel()
 
         let periodSec = 60.0 / bpm
         let intervalNs = Int(periodSec * 1_000_000_000)
 
         let source = DispatchSource.makeTimerSource(queue: timerQueue)
-        // DispatchTime is uptime-based; walltime and uptime advance at the
-        // same rate over the handoff window (no leap-second/wall-clock jump
-        // is realistic), so converting an anchor-derived walltime delay into
-        // a DispatchTime offset is accurate to well under one beat period.
-        let deadline: DispatchTime = .now() + .nanoseconds(Int(max(0, initialDelayMs) * 1_000_000))
         source.schedule(
-            deadline: deadline,
+            deadline: .now(),
             repeating: .nanoseconds(intervalNs),
             leeway: .milliseconds(2)
         )
@@ -250,9 +281,9 @@ public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func tick() {
-        // Read state without the lock — the timer is the only writer of
-        // beatIndex and the only reader of these during a tick, so no
-        // contention. start()/stop() serialize onto the same queue.
+        // Read state without a lock — the timer is the only writer of
+        // beatIndex and the only reader of these during a tick. start()/
+        // stop() serialize onto the same queue.
         let state = self.beatStateForCurrentBeat()
         beatIndex &+= 1
 
@@ -294,6 +325,50 @@ public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
         player.scheduleBuffer(buffer, at: nil, options: [.interrupts], completionHandler: nil)
         if !player.isPlaying {
             player.play()
+        }
+    }
+
+    // MARK: - AVAudioSession interruption handling
+
+    /// Called on the main thread by NotificationCenter when a phone call,
+    /// Siri, or a competing playback session takes exclusive audio. We hop
+    /// onto `timerQueue` so all state mutation stays on the serial queue.
+    @objc private func handleAudioSessionInterruption(_ notification: Notification) {
+        guard
+            let userInfo = notification.userInfo,
+            let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+            let type = AVAudioSession.InterruptionType(rawValue: typeValue)
+        else { return }
+
+        timerQueue.async { [weak self] in
+            guard let self = self else { return }
+            switch type {
+            case .began:
+                // Audio can't play through an interruption. Cancel the timer
+                // but leave `beatIndex` intact so we resume from the correct
+                // position when the interruption ends.
+                self.timer?.cancel()
+                self.timer = nil
+            case .ended:
+                // Only auto-resume if the user hadn't already stopped us.
+                guard self.isScheduling else { return }
+                let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                guard options.contains(.shouldResume) else { return }
+                do {
+                    try AVAudioSession.sharedInstance().setActive(true)
+                    if !self.engine.isRunning {
+                        try self.engine.start()
+                    }
+                    self.restartTimer()
+                } catch {
+                    // Give up gracefully — the next explicit start() from JS
+                    // will retry the whole activation path.
+                    NSLog("ClickKeep native metronome: resume after interruption failed: \(error)")
+                }
+            @unknown default:
+                break
+            }
         }
     }
 }
