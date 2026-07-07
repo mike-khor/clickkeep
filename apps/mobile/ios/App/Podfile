@@ -12,6 +12,7 @@ def capacitor_pods
   pod 'Capacitor', :path => '../../../../node_modules/.pnpm/@capacitor+ios@7.6.7_@capacitor+core@7.6.7/node_modules/@capacitor/ios'
   pod 'CapacitorCordova', :path => '../../../../node_modules/.pnpm/@capacitor+ios@7.6.7_@capacitor+core@7.6.7/node_modules/@capacitor/ios'
   pod 'CapacitorHaptics', :path => '../../../../node_modules/.pnpm/@capacitor+haptics@7.0.5_@capacitor+core@7.6.7/node_modules/@capacitor/haptics'
+  pod 'ClickkeepNativeMetronome', :path => '../../../../packages/native-metronome'
 end
 
 target 'App' do

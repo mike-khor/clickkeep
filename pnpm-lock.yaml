@@ -23,6 +23,9 @@ importers:
       '@capacitor/ios':
         specifier: ^7.0.0
         version: 7.6.7(@capacitor/core@7.6.7)
+      '@clickkeep/native-metronome':
+        specifier: workspace:*
+        version: link:../../packages/native-metronome
     devDependencies:
       '@capacitor/cli':
         specifier: ^7.0.0
@@ -92,6 +95,15 @@ importers:
       vitest:
         specifier: ^2.1.4
         version: 2.1.9(@types/node@26.1.0)
+
+  packages/native-metronome:
+    devDependencies:
+      '@capacitor/core':
+        specifier: ^7.0.0
+        version: 7.6.7
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
 
   packages/sync-core:
     devDependencies:

@@ -17,6 +17,7 @@ import {
   resetEngineStats,
 } from '../lib/audio.js';
 import { COPY } from '../copy/strings.js';
+import { getNativeMetronome, type NativeMetronomeHandle } from '../lib/platform-native-audio.js';
 import { BeatIndicator } from './BeatIndicator.js';
 import { TapButton } from './TapButton.js';
 import { OutputToggles } from './OutputToggles.js';
@@ -33,12 +34,6 @@ const HANDOFF_LOOKAHEAD_MS = 150;
 // Matches the scheduler's own defaults; also what HANDOFF_LOOKAHEAD_MS above
 // is sized against.
 const FOREGROUND_OPTS = { lookaheadSec: 0.1, scheduleIntervalMs: 25 } as const;
-// Background: iOS aggressively throttles setInterval when the webview is
-// hidden (sometimes down to ~1 Hz). Queue 30 s of beats every 5 s so even a
-// heavily throttled timer keeps the audio pipeline fed. On resume we don't
-// wait for this window to drain — flushAudioQueue silences everything
-// already queued so the fresh foreground scheduler can start immediately.
-const BACKGROUND_OPTS = { lookaheadSec: 30, scheduleIntervalMs: 5000 } as const;
 // Safety margin over FLUSH_RESTORE_DELAY_MS so the new scheduler's first
 // beat lands after master gain has finished ramping back up.
 const RESUME_ANCHOR_LEAD_MS = FLUSH_RESTORE_DELAY_MS + 60;
@@ -89,6 +84,18 @@ export function SoloMetronome(): JSX.Element {
   const accentPattern = useMetronome((s) => s.accentPattern);
   const accentPatternRef = useRef(accentPattern);
   accentPatternRef.current = accentPattern;
+  // Native (iOS) metronome handle + whether it's currently the active audio
+  // source. Hoisted onto the component so BOTH the visibility-handoff
+  // effect and the tempo/pattern effects can see it: when the app is
+  // backgrounded the Web Audio scheduler is torn down, so tempo changes
+  // must be routed through `native.updateTempo` instead of the seamless
+  // handoff. In a browser or non-iOS shell `nativeRef.current` is null
+  // and every native call is skipped.
+  const nativeRef = useRef<NativeMetronomeHandle | null>(null);
+  if (nativeRef.current === null) {
+    nativeRef.current = getNativeMetronome();
+  }
+  const nativeActiveRef = useRef(false);
 
   // Members listen, they don't drive: lock every tempo / playback affordance.
   // The Tier-3 worker rejects set-state/play/pause from non-owners; this is the
@@ -181,14 +188,10 @@ export function SoloMetronome(): JSX.Element {
     // throws here on construction. Ticks 2..N run inside setInterval and surface
     // via the window 'error' listener installed in audio.ts — both paths feed
     // the same recentErrors buffer.
-    // Start with tuning matching current visibility. If the user hits play
-    // while the tab is already hidden (rare — most start on the play screen),
-    // we skip straight to the background lookahead.
-    const initialTuning =
-      typeof document !== 'undefined' && document.visibilityState === 'hidden'
-        ? BACKGROUND_OPTS
-        : FOREGROUND_OPTS;
-    tuningRef.current = initialTuning;
+    // Always start on FOREGROUND_OPTS. If the tab is already hidden the
+    // visibility-handoff effect below will immediately swap to the native
+    // engine (on iOS) or leave Web Audio to suspend (in a browser).
+    tuningRef.current = FOREGROUND_OPTS;
     try {
       runningRef.current = startScheduler(
         ctx,
@@ -198,7 +201,7 @@ export function SoloMetronome(): JSX.Element {
         hapticEnabledRef,
         toneProfileRef,
         accentPatternRef,
-        initialTuning,
+        FOREGROUND_OPTS,
       );
     } catch (err) {
       recordEngineError(err);
@@ -220,6 +223,11 @@ export function SoloMetronome(): JSX.Element {
   // which sits in the future — so no instant click fires.
   useEffect(() => {
     if (!isPlaying) return;
+    // If native is currently the active audio source, the tempo change is
+    // pushed through `native.updateTempo` in a dedicated effect below —
+    // starting a Web Audio scheduler now would queue nodes into a suspended
+    // AudioContext and then double-fire on resume.
+    if (nativeActiveRef.current) return;
     const prev = anchorRef.current;
     if (prev === null) return;
     if (prev.bpm === bpm && prev.beatsPerBar === beatsPerBar) return;
@@ -249,62 +257,60 @@ export function SoloMetronome(): JSX.Element {
     );
   }, [bpm, beatsPerBar, isPlaying, setCurrentBeat]);
 
-  // Background-audio handoff. On iOS (Capacitor shell), backgrounding the app
-  // or locking the screen throttles setInterval — sometimes down to ~1 Hz —
-  // which starves the scheduler's default 100 ms lookahead and causes
-  // dropouts. When visibility flips to hidden, hand off to a fat 30 s
-  // lookahead scheduled every 5 s so audio survives the throttling. On
-  // return to foreground, hand back to low-latency tuning so tempo edits
-  // feel snappy again. Uses the same seamless-handoff pattern as tempo
-  // changes: anchor the new scheduler to the next beat boundary at the
-  // current tempo, past the audio lookahead, so no beat doubles up.
+  // Native-audio handoff. On iOS (Capacitor shell), Web Audio suspends the
+  // moment the WKWebView backgrounds — the AudioContext freezes and any
+  // queued events replay in a burst on resume. `UIBackgroundModes = audio`
+  // and an `AVAudioSession = .playback` are necessary but not sufficient:
+  // the WebView-owned graph still goes to sleep.
+  //
+  // Solution: on `visibilitychange -> hidden`, stop the Web Audio scheduler
+  // entirely and hand the click over to the native AVAudioEngine plugin.
+  // On `visible`, stop native, flush any silenced audio nodes, and start
+  // a fresh Web Audio scheduler anchored just past the master-gain restore
+  // point. In an ordinary browser (or an Android Capacitor build) the
+  // native handle is null and we simply do nothing on background — the
+  // click will pause when the tab is hidden, same as before iOS shipped.
   useEffect(() => {
     if (!isPlaying) return;
     if (typeof document === 'undefined') return;
 
-    const swapTuning = (next: SchedulerTuning, handoffLookaheadMs: number): void => {
-      const prev = anchorRef.current;
-      if (prev === null) return;
-      // Nothing to do if we're already on this tuning.
-      if (
-        tuningRef.current.lookaheadSec === next.lookaheadSec &&
-        tuningRef.current.scheduleIntervalMs === next.scheduleIntervalMs
-      ) {
-        return;
-      }
-      const now = Date.now() + useMetronome.getState().sessionClockOffsetMs;
-      const periodMs = 60_000 / prev.bpm;
-      const elapsed = now - prev.startAt;
-      const beatsElapsed = Math.max(0, elapsed / periodMs);
-      let nextBeatAt = prev.startAt + Math.ceil(beatsElapsed) * periodMs;
-      // Push past any beat already inside the OLD scheduler's audio lookahead
-      // so we can't fire the same beat twice.
-      while (nextBeatAt - now < handoffLookaheadMs) nextBeatAt += periodMs;
+    const native = nativeRef.current;
 
-      const ctx = getAudioContext();
-      const nextAnchor: Anchor = { startAt: nextBeatAt, bpm: prev.bpm, beatsPerBar: prev.beatsPerBar };
+    const handoffToNative = async (): Promise<void> => {
+      if (native === null) return;
+      // Tear down the Web Audio scheduler first — otherwise its queued beats
+      // would replay through the master gain on resume.
       runningRef.current?.stop();
-      anchorRef.current = nextAnchor;
-      tuningRef.current = next;
-      runningRef.current = startScheduler(
-        ctx,
-        nextAnchor,
-        setCurrentBeat,
-        beatsPerBarRef,
-        hapticEnabledRef,
-        toneProfileRef,
-        accentPatternRef,
-        next,
-      );
+      runningRef.current = null;
+      // Silence anything already scheduled to the audio thread so it can't
+      // resurface when the WebView foregrounds again.
+      flushAudioQueue();
+      const prev = anchorRef.current;
+      const bpmForNative = prev?.bpm ?? bpm;
+      const beatsForNative = prev?.beatsPerBar ?? beatsPerBar;
+      try {
+        await native.start({
+          bpm: bpmForNative,
+          beatsPerBar: beatsForNative,
+          accentPattern: accentPatternRef.current.length > 0 ? accentPatternRef.current : undefined,
+        });
+        nativeActiveRef.current = true;
+      } catch (err) {
+        recordEngineError(err);
+      }
     };
 
-    // Resume from background: silence every audio node already queued
-    // (up to 30 s of beats at the old tempo) via the master-gain flush,
-    // then anchor a fresh foreground scheduler just past the master-gain
-    // restore point. This gives instant tempo response on resume — no
-    // "queued beats drain at old tempo" artifact — and works regardless
-    // of whether background audio actually kept playing on this device.
-    const resumeFromBackground = (): void => {
+    const handoffToWebAudio = async (): Promise<void> => {
+      if (native !== null && nativeActiveRef.current) {
+        try {
+          await native.stop();
+        } catch (err) {
+          recordEngineError(err);
+        }
+        nativeActiveRef.current = false;
+      }
+      // Flush anything the Web Audio graph might have queued while hidden,
+      // then anchor the fresh scheduler past the master-gain restore point.
       const prev = anchorRef.current;
       if (prev === null) return;
       flushAudioQueue();
@@ -313,12 +319,10 @@ export function SoloMetronome(): JSX.Element {
       const elapsed = now - prev.startAt;
       const beatsElapsed = Math.max(0, elapsed / periodMs);
       let nextBeatAt = prev.startAt + Math.ceil(beatsElapsed) * periodMs;
-      // First new beat must land after the master-gain ramp-up completes.
       while (nextBeatAt - now < RESUME_ANCHOR_LEAD_MS) nextBeatAt += periodMs;
 
       const ctx = getAudioContext();
       const nextAnchor: Anchor = { startAt: nextBeatAt, bpm: prev.bpm, beatsPerBar: prev.beatsPerBar };
-      runningRef.current?.stop();
       anchorRef.current = nextAnchor;
       tuningRef.current = FOREGROUND_OPTS;
       runningRef.current = startScheduler(
@@ -335,17 +339,58 @@ export function SoloMetronome(): JSX.Element {
 
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') {
-        // Foreground → background. Old scheduler has a 100 ms lookahead, so
-        // the standard 150 ms handoff is enough to clear its queue.
-        swapTuning(BACKGROUND_OPTS, HANDOFF_LOOKAHEAD_MS);
+        void handoffToNative();
       } else if (document.visibilityState === 'visible') {
-        resumeFromBackground();
+        void handoffToWebAudio();
       }
     };
 
     document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [isPlaying, setCurrentBeat]);
+    // If the user hits play while the tab is already hidden — rare but
+    // possible on iOS if the screen locks the moment they tap play — jump
+    // straight into the native engine so audio starts immediately instead
+    // of waiting for the next visibilitychange.
+    if (document.visibilityState === 'hidden') {
+      void handoffToNative();
+    }
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      // If the effect is torn down (isPlaying flipped off) while the
+      // native engine is still running — e.g. the user hits pause while
+      // the app is backgrounded and iOS wakes us just enough to run the
+      // React cleanup — make sure we don't leave AVAudioEngine ticking.
+      if (native !== null && nativeActiveRef.current) {
+        void native.stop().catch((err: unknown) => recordEngineError(err));
+        nativeActiveRef.current = false;
+      }
+    };
+  }, [isPlaying, setCurrentBeat, bpm, beatsPerBar]);
+
+  // While the native engine is the active audio source, tempo / bar-length /
+  // accent-pattern changes need to be pushed through `updateTempo` — the
+  // Web Audio seamless-handoff effect above is a no-op because
+  // `runningRef.current` is null. In practice the app is backgrounded when
+  // native is active, so most users won't touch the sliders, but Session-
+  // mode owners CAN receive a MIDI tempo-map change while their screen
+  // is locked; this effect keeps them honest.
+  useEffect(() => {
+    if (!isPlaying) return;
+    const native = nativeRef.current;
+    if (native === null) return;
+    if (!nativeActiveRef.current) return;
+    void native
+      .updateTempo({
+        bpm,
+        beatsPerBar,
+        accentPattern: accentPattern.length > 0 ? accentPattern : undefined,
+      })
+      .catch((err: unknown) => recordEngineError(err));
+    // Also keep the Web Audio anchor in sync so `handoffToWebAudio` uses
+    // the latest tempo when the app comes back to the foreground.
+    if (anchorRef.current !== null) {
+      anchorRef.current = { ...anchorRef.current, bpm, beatsPerBar };
+    }
+  }, [isPlaying, bpm, beatsPerBar, accentPattern]);
 
   // When a tempo map is loaded and the user hits Play, schedule each upcoming
   // BPM change. Each timer fires HANDOFF_LOOKAHEAD_MS before the target time
@@ -470,7 +515,7 @@ export function SoloMetronome(): JSX.Element {
             ))}
           </select>
         </label>
-        <ToneProfileSelector disabled={isMember} />
+        <ToneProfileSelector />
         <OutputToggles />
         <MidiSheet disabled={isMember} />
       </div>

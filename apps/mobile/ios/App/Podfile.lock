@@ -4,11 +4,14 @@ PODS:
   - CapacitorCordova (7.6.7)
   - CapacitorHaptics (7.0.5):
     - Capacitor
+  - ClickkeepNativeMetronome (0.0.0):
+    - Capacitor
 
 DEPENDENCIES:
   - "Capacitor (from `../../../../node_modules/.pnpm/@capacitor+ios@7.6.7_@capacitor+core@7.6.7/node_modules/@capacitor/ios`)"
   - "CapacitorCordova (from `../../../../node_modules/.pnpm/@capacitor+ios@7.6.7_@capacitor+core@7.6.7/node_modules/@capacitor/ios`)"
   - "CapacitorHaptics (from `../../../../node_modules/.pnpm/@capacitor+haptics@7.0.5_@capacitor+core@7.6.7/node_modules/@capacitor/haptics`)"
+  - ClickkeepNativeMetronome (from `../../../../packages/native-metronome`)
 
 EXTERNAL SOURCES:
   Capacitor:
@@ -17,12 +20,15 @@ EXTERNAL SOURCES:
     :path: "../../../../node_modules/.pnpm/@capacitor+ios@7.6.7_@capacitor+core@7.6.7/node_modules/@capacitor/ios"
   CapacitorHaptics:
     :path: "../../../../node_modules/.pnpm/@capacitor+haptics@7.0.5_@capacitor+core@7.6.7/node_modules/@capacitor/haptics"
+  ClickkeepNativeMetronome:
+    :path: "../../../../packages/native-metronome"
 
 SPEC CHECKSUMS:
   Capacitor: 8ef25ba872436d2c5ac2a4791f7255529bdcd93b
   CapacitorCordova: 139e2ed3d91c54b5aeae7941135c9f9aefc6da1d
   CapacitorHaptics: 1b145fa83c622e5383a3bac04ea81e2514f0b0f5
+  ClickkeepNativeMetronome: f0b5a23d016158caec555e88bab1a0d6accd2d60
 
-PODFILE CHECKSUM: 48b08d94929785a531ed06e328fb60532fa4eb6d
+PODFILE CHECKSUM: 4d7cb11a3f49686482079ae992de09553eb0ca91
 
 COCOAPODS: 1.16.2
