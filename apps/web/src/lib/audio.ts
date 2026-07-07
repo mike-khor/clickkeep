@@ -92,6 +92,30 @@ export function isMuted(): boolean {
 }
 
 /**
+ * Silence every audio node already queued to the audio thread, then restore
+ * the mute-state target volume a short moment later. Used when returning from
+ * background so beats queued for the "big lookahead" background schedule
+ * don't drain out at the old tempo when the user resumes — the fresh
+ * foreground scheduler can be anchored past the restore point and play
+ * cleanly.
+ *
+ * Callers MUST anchor the fresh scheduler's first beat at
+ * FLUSH_RESTORE_DELAY_MS or later after invoking this, otherwise the new
+ * beat will fire while master gain is still zero.
+ */
+export const FLUSH_RESTORE_DELAY_MS = 150;
+export function flushAudioQueue(): void {
+  if (masterGain === null || realCtx === null) return;
+  const now = realCtx.currentTime;
+  const restoreTarget = muted ? 0 : 1;
+  const restoreAt = now + FLUSH_RESTORE_DELAY_MS / 1000;
+  masterGain.gain.cancelScheduledValues(now);
+  masterGain.gain.setValueAtTime(0, now);
+  masterGain.gain.setValueAtTime(0, restoreAt - 0.02);
+  masterGain.gain.linearRampToValueAtTime(restoreTarget, restoreAt);
+}
+
+/**
  * Record a beat that the scheduler scheduled. Called from the engine driver
  * (see SoloMetronome) so the debug bridge has a live signal of "is the click
  * engine actually firing?" — an agent or human can read window.__clickkeep

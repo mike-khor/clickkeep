@@ -8,7 +8,14 @@ import {
   pulse,
 } from '@clickkeep/click-engine';
 import { useMetronome } from '../lib/store.js';
-import { getAudioContext, recordBeat, recordEngineError, resetEngineStats } from '../lib/audio.js';
+import {
+  FLUSH_RESTORE_DELAY_MS,
+  flushAudioQueue,
+  getAudioContext,
+  recordBeat,
+  recordEngineError,
+  resetEngineStats,
+} from '../lib/audio.js';
 import { COPY } from '../copy/strings.js';
 import { BeatIndicator } from './BeatIndicator.js';
 import { TapButton } from './TapButton.js';
@@ -28,12 +35,13 @@ const HANDOFF_LOOKAHEAD_MS = 150;
 const FOREGROUND_OPTS = { lookaheadSec: 0.1, scheduleIntervalMs: 25 } as const;
 // Background: iOS aggressively throttles setInterval when the webview is
 // hidden (sometimes down to ~1 Hz). Queue 30 s of beats every 5 s so even a
-// heavily throttled timer keeps the audio pipeline fed. The larger lookahead
-// during a background handoff is safe because we already push the handoff
-// anchor past BACKGROUND_HANDOFF_LOOKAHEAD_MS.
+// heavily throttled timer keeps the audio pipeline fed. On resume we don't
+// wait for this window to drain — flushAudioQueue silences everything
+// already queued so the fresh foreground scheduler can start immediately.
 const BACKGROUND_OPTS = { lookaheadSec: 30, scheduleIntervalMs: 5000 } as const;
-// Bigger safety margin when handing off into the 30 s background lookahead.
-const BACKGROUND_HANDOFF_LOOKAHEAD_MS = 30_500;
+// Safety margin over FLUSH_RESTORE_DELAY_MS so the new scheduler's first
+// beat lands after master gain has finished ramping back up.
+const RESUME_ANCHOR_LEAD_MS = FLUSH_RESTORE_DELAY_MS + 60;
 
 interface Anchor {
   startAt: number;
@@ -290,17 +298,48 @@ export function SoloMetronome(): JSX.Element {
       );
     };
 
+    // Resume from background: silence every audio node already queued
+    // (up to 30 s of beats at the old tempo) via the master-gain flush,
+    // then anchor a fresh foreground scheduler just past the master-gain
+    // restore point. This gives instant tempo response on resume — no
+    // "queued beats drain at old tempo" artifact — and works regardless
+    // of whether background audio actually kept playing on this device.
+    const resumeFromBackground = (): void => {
+      const prev = anchorRef.current;
+      if (prev === null) return;
+      flushAudioQueue();
+      const now = Date.now() + useMetronome.getState().sessionClockOffsetMs;
+      const periodMs = 60_000 / prev.bpm;
+      const elapsed = now - prev.startAt;
+      const beatsElapsed = Math.max(0, elapsed / periodMs);
+      let nextBeatAt = prev.startAt + Math.ceil(beatsElapsed) * periodMs;
+      // First new beat must land after the master-gain ramp-up completes.
+      while (nextBeatAt - now < RESUME_ANCHOR_LEAD_MS) nextBeatAt += periodMs;
+
+      const ctx = getAudioContext();
+      const nextAnchor: Anchor = { startAt: nextBeatAt, bpm: prev.bpm, beatsPerBar: prev.beatsPerBar };
+      runningRef.current?.stop();
+      anchorRef.current = nextAnchor;
+      tuningRef.current = FOREGROUND_OPTS;
+      runningRef.current = startScheduler(
+        ctx,
+        nextAnchor,
+        setCurrentBeat,
+        beatsPerBarRef,
+        hapticEnabledRef,
+        toneProfileRef,
+        accentPatternRef,
+        FOREGROUND_OPTS,
+      );
+    };
+
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') {
         // Foreground → background. Old scheduler has a 100 ms lookahead, so
         // the standard 150 ms handoff is enough to clear its queue.
         swapTuning(BACKGROUND_OPTS, HANDOFF_LOOKAHEAD_MS);
       } else if (document.visibilityState === 'visible') {
-        // Background → foreground. Old scheduler has a 30 s lookahead and has
-        // already queued Web Audio nodes across that whole window; those keep
-        // playing after `stop()`. Anchor the fresh scheduler past 30 s so it
-        // can't re-schedule beats the old one already has in flight.
-        swapTuning(FOREGROUND_OPTS, BACKGROUND_HANDOFF_LOOKAHEAD_MS);
+        resumeFromBackground();
       }
     };
 
@@ -478,15 +517,20 @@ function startScheduler(
       // alignment is approximate; for solo mode this is good enough.
       setTimeout(() => {
         setCurrentBeat(beat);
-        // Read the latest signature so handoffs feel correct on the very
-        // first beat after a change, even before React re-renders.
-        const bpbNow = beatsPerBarRef.current;
         if (!hapticEnabledRef.current) return;
-        // Haptic still mirrors the natural downbeat — muted/accent state only
-        // affects audio output. Visual + haptic always fire so members feel
-        // every beat regardless of audio configuration.
-        if (beat % bpbNow === 0) pulse(60);
-        else pulse(20);
+        // Haptic follows the user's accent pattern: accent = strong pulse,
+        // normal = light pulse, mute = no pulse. Matches audio behavior
+        // exactly — a beat the user muted is silent AND vibration-less.
+        const pattern = accentPatternRef.current;
+        const bpbNow = beatsPerBarRef.current;
+        const state =
+          pattern.length === 0
+            ? beat % bpbNow === 0
+              ? 'accent'
+              : 'normal'
+            : pattern[((beat % pattern.length) + pattern.length) % pattern.length] ?? 'normal';
+        if (state === 'mute') return;
+        pulse(state === 'accent' ? 60 : 20);
       }, 0);
     },
   });
