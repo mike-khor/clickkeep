@@ -515,6 +515,10 @@ export function SoloMetronome(): JSX.Element {
             ))}
           </select>
         </label>
+        {/* Unlike every other control above, Tone Profile is deliberately left
+            enabled for members: per CONTEXT.md it's local-only per Voice and
+            never propagates over the wire, so a member's choice can never
+            desync group timing. */}
         <ToneProfileSelector />
         <OutputToggles />
         <MidiSheet disabled={isMember} />
