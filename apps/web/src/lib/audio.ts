@@ -30,6 +30,17 @@ const RECENT_ERRORS_MAX = 8;
 let beatsScheduled = 0;
 let lastBeatAt: number | null = null;
 
+// Internal: how long we hold master gain at 0 during a silence-flush before
+// the caller is allowed to schedule a fresh beat. Sized to comfortably exceed
+// the scheduler's default 100ms lookahead so previously-queued nodes drain
+// silently. Kept internal — callers use `silenceScheduledAudio()`'s return
+// value instead of reaching for this constant.
+const FLUSH_HOLD_MS = 150;
+// Extra breathing room on top of FLUSH_HOLD_MS so the caller's first fresh
+// beat lands after the ramp-in has completed. Empirically 60ms is enough on
+// WKWebView after a background cycle.
+const RESUME_ANCHOR_LEAD_MS = 60;
+
 /**
  * Lazily create the AudioContext. Browsers require a user gesture before audio,
  * so this should be called from a click handler.
@@ -70,6 +81,29 @@ export function getAudioContext(): AudioContext {
 }
 
 /**
+ * Canonical master-gain automation. All internal callers (mute toggle, flush,
+ * ramp-in) route through here so the "which strategy owns this write?"
+ * question has one answer.
+ *
+ * `snap: true` clears any pending automation and jumps the gain immediately
+ * (used when we need a hard cut). Otherwise we ramp from the current value to
+ * the target over `rampSec` seconds (default 10ms — long enough to avoid a
+ * click, short enough to feel instant).
+ */
+function setMasterGain(target: number, opts: { rampSec?: number; snap?: boolean } = {}): void {
+  if (masterGain === null || realCtx === null) return;
+  const now = realCtx.currentTime;
+  masterGain.gain.cancelScheduledValues(now);
+  if (opts.snap === true) {
+    masterGain.gain.setValueAtTime(target, now);
+    return;
+  }
+  const rampSec = opts.rampSec ?? 0.01;
+  masterGain.gain.setValueAtTime(masterGain.gain.value, now);
+  masterGain.gain.linearRampToValueAtTime(target, now + rampSec);
+}
+
+/**
  * Mute or unmute the click audio. Visual flash + haptic continue to fire because
  * those are driven from the React layer, not from the audio graph.
  *
@@ -78,13 +112,7 @@ export function getAudioContext(): AudioContext {
  */
 export function setMuted(next: boolean): void {
   muted = next;
-  if (masterGain !== null && realCtx !== null) {
-    const target = next ? 0 : 1;
-    const now = realCtx.currentTime;
-    masterGain.gain.cancelScheduledValues(now);
-    masterGain.gain.setValueAtTime(masterGain.gain.value, now);
-    masterGain.gain.linearRampToValueAtTime(target, now + 0.01);
-  }
+  setMasterGain(next ? 0 : 1);
 }
 
 export function isMuted(): boolean {
@@ -98,14 +126,14 @@ export function isMuted(): boolean {
  *
  * On WKWebView after a background/foreground cycle, `resume()` alone is
  * not enough: the context transitions to `running` but no audio comes out
- * until an actual audio operation nudges the pipeline. Three defenses:
+ * until an actual audio operation nudges the pipeline. Two defenses:
  *   1. await `resume()` so the state transition completes before we
  *      schedule anything on the timeline.
- *   2. force `masterGain.gain.value` directly (bypasses any lingering
- *      scheduled automation from a previous flush that may not have
- *      re-processed after the interrupt).
- *   3. play a 1-sample silent buffer — the standard iOS Safari
- *      workaround for waking a stuck audio pipeline.
+ *   2. play a 1-sample silent buffer through the master gain — the
+ *      standard iOS Safari workaround for waking a stuck audio pipeline.
+ *
+ * Callers own the master-gain ramp — this function does not touch it,
+ * so a subsequent `rampMasterGainIn()` won't fight a direct assignment.
  */
 export async function resumeAudioContext(): Promise<void> {
   if (realCtx === null || masterGain === null) return;
@@ -118,33 +146,41 @@ export async function resumeAudioContext(): Promise<void> {
       return;
     }
   }
-  masterGain.gain.value = muted ? 0 : 1;
   const src = realCtx.createBufferSource();
   const buf = realCtx.createBuffer(1, 1, realCtx.sampleRate);
   src.buffer = buf;
-  src.connect(realCtx.destination);
+  // Route through masterGain (not realCtx.destination) so the wake-up buffer
+  // respects the mute state, matching every other audio node in the graph.
+  src.connect(masterGain);
   src.start();
   src.stop(realCtx.currentTime + 0.001);
 }
 
 /**
- * Silence every audio node already queued to the audio thread, then restore
- * the mute-state target volume a short moment later. Used when returning from
- * background so beats queued for the "big lookahead" background schedule
- * don't drain out at the old tempo when the user resumes — the fresh
- * foreground scheduler can be anchored past the restore point and play
- * cleanly.
+ * Silence every audio node already queued to the audio thread and hold the
+ * master gain at 0 for a short window. Used at background-handoff so beats
+ * queued for the Web Audio scheduler can't burst out on resume.
  *
- * Callers MUST anchor the fresh scheduler's first beat at
- * FLUSH_RESTORE_DELAY_MS or later after invoking this, otherwise the new
- * beat will fire while master gain is still zero.
+ * Returns the wall-clock instant (`Date.now()` frame) after which fresh
+ * beats scheduled through `getAudioContext()` will be audible. The caller
+ * should anchor its next scheduler at or past this instant.
  */
-export const FLUSH_RESTORE_DELAY_MS = 150;
-export function flushAudioQueue(): void {
+export function silenceScheduledAudio(): number {
+  if (masterGain === null || realCtx === null) return Date.now();
+  setMasterGain(0, { snap: true });
+  return Date.now() + FLUSH_HOLD_MS + RESUME_ANCHOR_LEAD_MS;
+}
+
+/**
+ * Ramp master gain from silent back up to the mute-state target, respecting
+ * the FLUSH_HOLD_MS silence window that `silenceScheduledAudio()` promised.
+ * Used at foreground-return, after `resumeAudioContext()`.
+ */
+export function rampMasterGainIn(): void {
   if (masterGain === null || realCtx === null) return;
   const now = realCtx.currentTime;
   const restoreTarget = muted ? 0 : 1;
-  const restoreAt = now + FLUSH_RESTORE_DELAY_MS / 1000;
+  const restoreAt = now + FLUSH_HOLD_MS / 1000;
   masterGain.gain.cancelScheduledValues(now);
   masterGain.gain.setValueAtTime(0, now);
   masterGain.gain.setValueAtTime(0, restoreAt - 0.02);
@@ -153,8 +189,8 @@ export function flushAudioQueue(): void {
 
 /**
  * Record a beat that the scheduler scheduled. Called from the engine driver
- * (see SoloMetronome) so the debug bridge has a live signal of "is the click
- * engine actually firing?" — an agent or human can read window.__clickkeep
+ * (see useMetronomeEngine) so the debug bridge has a live signal of "is the
+ * click engine actually firing?" — an agent or human can read window.__clickkeep
  * without listening for sound.
  */
 export function recordBeat(beat: number, audioTime: number): void {

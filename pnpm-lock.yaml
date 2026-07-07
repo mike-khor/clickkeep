@@ -52,6 +52,9 @@ importers:
         specifier: ^5.0.1
         version: 5.0.13(@types/react@18.3.28)(react@18.3.1)
     devDependencies:
+      '@clickkeep/native-metronome':
+        specifier: workspace:*
+        version: link:../../packages/native-metronome
       '@playwright/test':
         specifier: ^1.60.0
         version: 1.60.0
