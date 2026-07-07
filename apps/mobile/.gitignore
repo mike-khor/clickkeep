@@ -5,3 +5,7 @@ ios/App/Pods/
 ios/.gitignore.local
 DerivedData/
 *.xcuserdata/
+
+# Per-developer Capacitor config with a LAN IP — copy from
+# capacitor.config.example.ts on first checkout. Never commit real IPs.
+capacitor.config.ts

@@ -20,10 +20,9 @@ preview_id = "PLACEHOLDER_PREVIEW_KV_ID"
 [observability]
 enabled = true
 
-# Bind to all interfaces (not just loopback) so a phone or other device on the
-# same LAN can reach the worker for group-mode testing. Combine with
-# VITE_SESSION_WORKER_URL=http://<mac-lan-ip>:8787 in apps/web/.env.local on
-# the client side (see apps/web/.env.example).
-[dev]
-ip = "0.0.0.0"
-port = 8787
+# The dev worker binds to loopback (127.0.0.1) by default — safe for
+# browser-on-Mac testing. Session ownership is implicit ("you opened it,
+# you control it"), so an unauthenticated worker on the LAN would let any
+# nearby device interfere with rehearsals. To test group mode from a
+# phone on the same Wi-Fi, opt in explicitly with `pnpm worker:dev:lan`
+# (which passes `--ip 0.0.0.0`). See apps/web/.env.example.
