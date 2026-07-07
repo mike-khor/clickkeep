@@ -22,10 +22,28 @@ import { ToneProfileSelector } from './ToneProfileSelector.js';
 // safe margin without an audible gap.
 const HANDOFF_LOOKAHEAD_MS = 150;
 
+// Foreground: tight lookahead + fast interval = low latency for tempo edits.
+// Matches the scheduler's own defaults; also what HANDOFF_LOOKAHEAD_MS above
+// is sized against.
+const FOREGROUND_OPTS = { lookaheadSec: 0.1, scheduleIntervalMs: 25 } as const;
+// Background: iOS aggressively throttles setInterval when the webview is
+// hidden (sometimes down to ~1 Hz). Queue 30 s of beats every 5 s so even a
+// heavily throttled timer keeps the audio pipeline fed. The larger lookahead
+// during a background handoff is safe because we already push the handoff
+// anchor past BACKGROUND_HANDOFF_LOOKAHEAD_MS.
+const BACKGROUND_OPTS = { lookaheadSec: 30, scheduleIntervalMs: 5000 } as const;
+// Bigger safety margin when handing off into the 30 s background lookahead.
+const BACKGROUND_HANDOFF_LOOKAHEAD_MS = 30_500;
+
 interface Anchor {
   startAt: number;
   bpm: number;
   beatsPerBar: number;
+}
+
+interface SchedulerTuning {
+  lookaheadSec: number;
+  scheduleIntervalMs: number;
 }
 
 export function SoloMetronome(): JSX.Element {
@@ -43,6 +61,10 @@ export function SoloMetronome(): JSX.Element {
   } = useMetronome();
   const runningRef = useRef<RunningClick | null>(null);
   const anchorRef = useRef<Anchor | null>(null);
+  // Track which tuning the currently-running scheduler was started with so the
+  // seamless-handoff effects (tempo change, signature change) can re-start with
+  // the same tuning even after a visibility flip.
+  const tuningRef = useRef<SchedulerTuning>(FOREGROUND_OPTS);
   // Read latest beatsPerBar inside the scheduler callback without rebinding it,
   // so signature changes also flow through without restarting the engine.
   const beatsPerBarRef = useRef(beatsPerBar);
@@ -151,6 +173,14 @@ export function SoloMetronome(): JSX.Element {
     // throws here on construction. Ticks 2..N run inside setInterval and surface
     // via the window 'error' listener installed in audio.ts — both paths feed
     // the same recentErrors buffer.
+    // Start with tuning matching current visibility. If the user hits play
+    // while the tab is already hidden (rare — most start on the play screen),
+    // we skip straight to the background lookahead.
+    const initialTuning =
+      typeof document !== 'undefined' && document.visibilityState === 'hidden'
+        ? BACKGROUND_OPTS
+        : FOREGROUND_OPTS;
+    tuningRef.current = initialTuning;
     try {
       runningRef.current = startScheduler(
         ctx,
@@ -160,6 +190,7 @@ export function SoloMetronome(): JSX.Element {
         hapticEnabledRef,
         toneProfileRef,
         accentPatternRef,
+        initialTuning,
       );
     } catch (err) {
       recordEngineError(err);
@@ -206,8 +237,76 @@ export function SoloMetronome(): JSX.Element {
       hapticEnabledRef,
       toneProfileRef,
       accentPatternRef,
+      tuningRef.current,
     );
   }, [bpm, beatsPerBar, isPlaying, setCurrentBeat]);
+
+  // Background-audio handoff. On iOS (Capacitor shell), backgrounding the app
+  // or locking the screen throttles setInterval — sometimes down to ~1 Hz —
+  // which starves the scheduler's default 100 ms lookahead and causes
+  // dropouts. When visibility flips to hidden, hand off to a fat 30 s
+  // lookahead scheduled every 5 s so audio survives the throttling. On
+  // return to foreground, hand back to low-latency tuning so tempo edits
+  // feel snappy again. Uses the same seamless-handoff pattern as tempo
+  // changes: anchor the new scheduler to the next beat boundary at the
+  // current tempo, past the audio lookahead, so no beat doubles up.
+  useEffect(() => {
+    if (!isPlaying) return;
+    if (typeof document === 'undefined') return;
+
+    const swapTuning = (next: SchedulerTuning, handoffLookaheadMs: number): void => {
+      const prev = anchorRef.current;
+      if (prev === null) return;
+      // Nothing to do if we're already on this tuning.
+      if (
+        tuningRef.current.lookaheadSec === next.lookaheadSec &&
+        tuningRef.current.scheduleIntervalMs === next.scheduleIntervalMs
+      ) {
+        return;
+      }
+      const now = Date.now() + useMetronome.getState().sessionClockOffsetMs;
+      const periodMs = 60_000 / prev.bpm;
+      const elapsed = now - prev.startAt;
+      const beatsElapsed = Math.max(0, elapsed / periodMs);
+      let nextBeatAt = prev.startAt + Math.ceil(beatsElapsed) * periodMs;
+      // Push past any beat already inside the OLD scheduler's audio lookahead
+      // so we can't fire the same beat twice.
+      while (nextBeatAt - now < handoffLookaheadMs) nextBeatAt += periodMs;
+
+      const ctx = getAudioContext();
+      const nextAnchor: Anchor = { startAt: nextBeatAt, bpm: prev.bpm, beatsPerBar: prev.beatsPerBar };
+      runningRef.current?.stop();
+      anchorRef.current = nextAnchor;
+      tuningRef.current = next;
+      runningRef.current = startScheduler(
+        ctx,
+        nextAnchor,
+        setCurrentBeat,
+        beatsPerBarRef,
+        hapticEnabledRef,
+        toneProfileRef,
+        accentPatternRef,
+        next,
+      );
+    };
+
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') {
+        // Foreground → background. Old scheduler has a 100 ms lookahead, so
+        // the standard 150 ms handoff is enough to clear its queue.
+        swapTuning(BACKGROUND_OPTS, HANDOFF_LOOKAHEAD_MS);
+      } else if (document.visibilityState === 'visible') {
+        // Background → foreground. Old scheduler has a 30 s lookahead and has
+        // already queued Web Audio nodes across that whole window; those keep
+        // playing after `stop()`. Anchor the fresh scheduler past 30 s so it
+        // can't re-schedule beats the old one already has in flight.
+        swapTuning(FOREGROUND_OPTS, BACKGROUND_HANDOFF_LOOKAHEAD_MS);
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [isPlaying, setCurrentBeat]);
 
   // When a tempo map is loaded and the user hits Play, schedule each upcoming
   // BPM change. Each timer fires HANDOFF_LOOKAHEAD_MS before the target time
@@ -354,10 +453,13 @@ function startScheduler(
   hapticEnabledRef: { current: boolean },
   toneProfileRef: { current: ToneProfile },
   accentPatternRef: { current: BeatState[] },
+  tuning: SchedulerTuning,
 ): RunningClick {
   const tempo = [{ startAt: anchor.startAt, bpm: anchor.bpm, beatsPerBar: anchor.beatsPerBar }];
   return startClick(tempo, {
     audioCtx: ctx,
+    lookaheadSec: tuning.lookaheadSec,
+    scheduleIntervalMs: tuning.scheduleIntervalMs,
     // Read the offset from the store on every tick so a fresh ping estimate
     // (every 30 s + burst at connect) auto-corrects clock drift within one tick.
     nowServerMs: () => Date.now() + useMetronome.getState().sessionClockOffsetMs,

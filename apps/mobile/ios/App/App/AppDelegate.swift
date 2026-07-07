@@ -1,5 +1,6 @@
 import UIKit
 import Capacitor
+import AVFoundation
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -7,7 +8,19 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        // Configure the audio session for background playback. Capacitor's
+        // default session category stops audio when the app is backgrounded or
+        // the screen is locked. `.playback` with `.mixWithOthers` keeps the
+        // click engine running behind the lock screen and doesn't clobber any
+        // other audio (e.g. a rehearsal recording) already playing on device.
+        // Paired with UIBackgroundModes = ["audio"] in Info.plist.
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try session.setActive(true)
+        } catch {
+            NSLog("ClickKeep: failed to configure AVAudioSession: \(error)")
+        }
         return true
     }
 
