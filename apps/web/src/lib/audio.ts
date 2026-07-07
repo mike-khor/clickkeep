@@ -92,6 +92,42 @@ export function isMuted(): boolean {
 }
 
 /**
+ * Bring the AudioContext back from an iOS-suspended state so it actually
+ * produces sound. Call from a foreground-return handler before starting a
+ * new scheduler.
+ *
+ * On WKWebView after a background/foreground cycle, `resume()` alone is
+ * not enough: the context transitions to `running` but no audio comes out
+ * until an actual audio operation nudges the pipeline. Three defenses:
+ *   1. await `resume()` so the state transition completes before we
+ *      schedule anything on the timeline.
+ *   2. force `masterGain.gain.value` directly (bypasses any lingering
+ *      scheduled automation from a previous flush that may not have
+ *      re-processed after the interrupt).
+ *   3. play a 1-sample silent buffer — the standard iOS Safari
+ *      workaround for waking a stuck audio pipeline.
+ */
+export async function resumeAudioContext(): Promise<void> {
+  if (realCtx === null || masterGain === null) return;
+  if (realCtx.state === 'suspended') {
+    try {
+      await realCtx.resume();
+    } catch {
+      // resume() can reject if there's no user gesture context; there's
+      // nothing we can do here — the next play tap will retry.
+      return;
+    }
+  }
+  masterGain.gain.value = muted ? 0 : 1;
+  const src = realCtx.createBufferSource();
+  const buf = realCtx.createBuffer(1, 1, realCtx.sampleRate);
+  src.buffer = buf;
+  src.connect(realCtx.destination);
+  src.start();
+  src.stop(realCtx.currentTime + 0.001);
+}
+
+/**
  * Silence every audio node already queued to the audio thread, then restore
  * the mute-state target volume a short moment later. Used when returning from
  * background so beats queued for the "big lookahead" background schedule

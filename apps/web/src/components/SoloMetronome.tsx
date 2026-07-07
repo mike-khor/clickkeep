@@ -15,6 +15,7 @@ import {
   recordBeat,
   recordEngineError,
   resetEngineStats,
+  resumeAudioContext,
 } from '../lib/audio.js';
 import { COPY } from '../copy/strings.js';
 import { getNativeMetronome, type NativeMetronomeHandle } from '../lib/platform-native-audio.js';
@@ -313,6 +314,10 @@ export function SoloMetronome(): JSX.Element {
         }
         nativeActiveRef.current = false;
       }
+      // Wake the AudioContext BEFORE flushing / scheduling. On WKWebView
+      // after a background cycle, resume() alone leaves the pipeline
+      // silent until a real audio op nudges it — see resumeAudioContext.
+      await resumeAudioContext();
       // Flush anything the Web Audio graph might have queued while hidden,
       // then anchor the fresh scheduler past the master-gain restore point.
       const prev = anchorRef.current;

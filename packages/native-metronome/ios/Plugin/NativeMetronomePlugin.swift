@@ -132,29 +132,28 @@ public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
         self.beatsPerBar = clampedBeats
         self.accentPattern = accentPattern
 
-        // Align the first tick to the true beat grid when the caller supplied
-        // an anchor. Without this the handoff from Web Audio always plays an
-        // accent immediately, resetting the perceived measure to beat 1 —
-        // regardless of where in the bar the app actually was.
+        // Fire the nearest beat immediately at handoff. Waiting for the next
+        // grid instant (ceil) can pause audio for up to a full period — at
+        // 120 BPM that's 500 ms of silence, which reads as a "strong lag"
+        // between locking the phone and hearing the click resume. Rounding
+        // to the nearest beat cuts that to at most period/2 of grid drift
+        // while giving instant audio.
+        //
+        // Accent still lands on the correct beat *position* in the bar,
+        // because `beatIndex % beatsPerBar` (or the accent pattern lookup)
+        // uses the anchor-derived beat number. On foreground handoff the
+        // Web Audio scheduler re-locks to the true grid.
         let periodMs = 60_000.0 / clampedBpm
-        var initialDelayMs: Double = 0
         if let anchor = anchorEpochMs, anchor.isFinite {
             let nowMs = Date().timeIntervalSince1970 * 1000
             let elapsed = nowMs - anchor
-            // The first tick this fires becomes `beatIndex` and is played AS the
-            // current beat, then the counter increments. So beatIndex must be
-            // the number of the beat we are about to play (not the one we just
-            // finished). ceil() picks the next integer beat since the anchor.
-            let nextBeatFloat = ceil(elapsed / periodMs)
-            let nextBeat = max(0, Int(nextBeatFloat))
-            let firstTickAtMs = anchor + Double(nextBeat) * periodMs
-            initialDelayMs = max(0, firstTickAtMs - nowMs)
-            self.beatIndex = nextBeat
+            let nearestBeatFloat = (elapsed / periodMs).rounded()
+            self.beatIndex = max(0, Int(nearestBeatFloat))
         } else {
             self.beatIndex = 0
         }
 
-        restartTimer(initialDelayMs: initialDelayMs)
+        restartTimer(initialDelayMs: 0)
     }
 
     private func endScheduling() {
