@@ -19,6 +19,8 @@ export interface NativeMetronomeStartOptions {
   bpm: number;
   beatsPerBar: number;
   accentPattern?: BeatState[];
+  /** Wall-clock ms of beat 0 in the current session. See plugin definitions.ts. */
+  anchorEpochMs?: number;
 }
 
 export interface NativeMetronomeHandle {

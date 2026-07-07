@@ -25,6 +25,15 @@ export interface StartOptions {
    * corresponding beat plays no sound.
    */
   accentPattern?: BeatState[];
+  /**
+   * Wall-clock (ms since epoch) instant of "beat 0" in the current
+   * playback session. When supplied, native computes the next true beat
+   * index from this anchor and delays the first tick to land on that
+   * beat's grid position — so the accent falls on the correct beat and
+   * the audio phase stays aligned with the JS scheduler that ran before
+   * the handoff. Omit to start immediately at beat 0 (legacy behavior).
+   */
+  anchorEpochMs?: number;
 }
 
 export type UpdateTempoOptions = StartOptions;

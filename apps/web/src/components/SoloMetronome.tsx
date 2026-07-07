@@ -293,6 +293,10 @@ export function SoloMetronome(): JSX.Element {
           bpm: bpmForNative,
           beatsPerBar: beatsForNative,
           accentPattern: accentPatternRef.current.length > 0 ? accentPatternRef.current : undefined,
+          // Share the wall-clock anchor so native lands its first tick on the
+          // true next-beat grid position — otherwise the accent always fires
+          // immediately and the perceived measure resets to beat 1.
+          anchorEpochMs: prev?.startAt,
         });
         nativeActiveRef.current = true;
       } catch (err) {
@@ -383,6 +387,7 @@ export function SoloMetronome(): JSX.Element {
         bpm,
         beatsPerBar,
         accentPattern: accentPattern.length > 0 ? accentPattern : undefined,
+        anchorEpochMs: anchorRef.current?.startAt,
       })
       .catch((err: unknown) => recordEngineError(err));
     // Also keep the Web Audio anchor in sync so `handoffToWebAudio` uses

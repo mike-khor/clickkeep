@@ -59,10 +59,16 @@ public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
         }
         let beats = call.getInt("beatsPerBar") ?? 4
         let pattern = call.getArray("accentPattern", String.self)
+        let anchor = call.getDouble("anchorEpochMs")
         timerQueue.async { [weak self] in
             guard let self = self else { return }
             do {
-                try self.beginScheduling(bpm: bpmValue, beatsPerBar: beats, accentPattern: pattern)
+                try self.beginScheduling(
+                    bpm: bpmValue,
+                    beatsPerBar: beats,
+                    accentPattern: pattern,
+                    anchorEpochMs: anchor
+                )
                 call.resolve()
             } catch {
                 NSLog("ClickKeep native metronome: start failed: \(error)")
@@ -85,13 +91,19 @@ public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
         }
         let beats = call.getInt("beatsPerBar") ?? 4
         let pattern = call.getArray("accentPattern", String.self)
+        let anchor = call.getDouble("anchorEpochMs")
         timerQueue.async { [weak self] in
             guard let self = self else { return }
             // MVP: full restart. The DispatchSourceTimer fires again after
             // `restartTimer` so the caller hears a fresh tick within one
             // period of the new tempo — no perceptible pause.
             do {
-                try self.beginScheduling(bpm: bpmValue, beatsPerBar: beats, accentPattern: pattern)
+                try self.beginScheduling(
+                    bpm: bpmValue,
+                    beatsPerBar: beats,
+                    accentPattern: pattern,
+                    anchorEpochMs: anchor
+                )
                 call.resolve()
             } catch {
                 NSLog("ClickKeep native metronome: updateTempo failed: \(error)")
@@ -102,7 +114,12 @@ public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
 
     // MARK: - Internals
 
-    private func beginScheduling(bpm: Double, beatsPerBar: Int, accentPattern: [String]?) throws {
+    private func beginScheduling(
+        bpm: Double,
+        beatsPerBar: Int,
+        accentPattern: [String]?,
+        anchorEpochMs: Double?
+    ) throws {
         stateLock.lock()
         defer { stateLock.unlock() }
 
@@ -114,9 +131,30 @@ public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
         self.bpm = clampedBpm
         self.beatsPerBar = clampedBeats
         self.accentPattern = accentPattern
-        self.beatIndex = 0
 
-        restartTimer()
+        // Align the first tick to the true beat grid when the caller supplied
+        // an anchor. Without this the handoff from Web Audio always plays an
+        // accent immediately, resetting the perceived measure to beat 1 —
+        // regardless of where in the bar the app actually was.
+        let periodMs = 60_000.0 / clampedBpm
+        var initialDelayMs: Double = 0
+        if let anchor = anchorEpochMs, anchor.isFinite {
+            let nowMs = Date().timeIntervalSince1970 * 1000
+            let elapsed = nowMs - anchor
+            // The first tick this fires becomes `beatIndex` and is played AS the
+            // current beat, then the counter increments. So beatIndex must be
+            // the number of the beat we are about to play (not the one we just
+            // finished). ceil() picks the next integer beat since the anchor.
+            let nextBeatFloat = ceil(elapsed / periodMs)
+            let nextBeat = max(0, Int(nextBeatFloat))
+            let firstTickAtMs = anchor + Double(nextBeat) * periodMs
+            initialDelayMs = max(0, firstTickAtMs - nowMs)
+            self.beatIndex = nextBeat
+        } else {
+            self.beatIndex = 0
+        }
+
+        restartTimer(initialDelayMs: initialDelayMs)
     }
 
     private func endScheduling() {
@@ -186,15 +224,22 @@ public class NativeMetronomePlugin: CAPPlugin, CAPBridgedPlugin {
 
     /// Cancel any existing timer and start a new one at the current BPM.
     /// Must be called from `timerQueue` (or with `stateLock` held).
-    private func restartTimer() {
+    /// `initialDelayMs` delays the FIRST tick — subsequent ticks then fire at
+    /// the natural beat period. Pass 0 to start immediately.
+    private func restartTimer(initialDelayMs: Double) {
         timer?.cancel()
 
         let periodSec = 60.0 / bpm
         let intervalNs = Int(periodSec * 1_000_000_000)
 
         let source = DispatchSource.makeTimerSource(queue: timerQueue)
+        // DispatchTime is uptime-based; walltime and uptime advance at the
+        // same rate over the handoff window (no leap-second/wall-clock jump
+        // is realistic), so converting an anchor-derived walltime delay into
+        // a DispatchTime offset is accurate to well under one beat period.
+        let deadline: DispatchTime = .now() + .nanoseconds(Int(max(0, initialDelayMs) * 1_000_000))
         source.schedule(
-            deadline: .now(),
+            deadline: deadline,
             repeating: .nanoseconds(intervalNs),
             leeway: .milliseconds(2)
         )
