@@ -40,3 +40,11 @@ apps/web/.playwright/
 
 # claude worktrees (managed by harness)
 .claude/worktrees/
+
+# --- Tooling caches (local-only agent + MCP state) ---
+# Claude Code scheduler lockfile — holds a live PID for this machine.
+.claude/scheduled_tasks.lock
+# Per-user Claude Code permission overrides (settings.json is shared; .local.json is not).
+.claude/settings.local.json
+# Playwright-MCP console dumps and screenshots from ad-hoc browser runs.
+.playwright-mcp/

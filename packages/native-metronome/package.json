@@ -1,0 +1,37 @@
+{
+  "name": "@clickkeep/native-metronome",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Capacitor iOS plugin that keeps the metronome clicking while the app is backgrounded or the screen is locked.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src/",
+    "ios/Plugin/",
+    "ClickkeepNativeMetronome.podspec"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "echo 'no tests'",
+    "build": "echo 'source-only workspace package'",
+    "generate:wavs": "node scripts/generate-wavs.mjs"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    }
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^7.0.0",
+    "@clickkeep/click-engine": "workspace:*"
+  },
+  "devDependencies": {
+    "@capacitor/core": "^7.0.0",
+    "@clickkeep/click-engine": "workspace:*",
+    "typescript": "^5.6.3"
+  }
+}

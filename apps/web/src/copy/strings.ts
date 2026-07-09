@@ -58,6 +58,10 @@ export const COPY = {
     ownerBadge: 'you are the owner',
     invalidChar: 'Use letters and digits only (no I, L, O, 0, 1).',
     needFour: 'Enter all 4 characters.',
+    activityToggle: 'Member activity',
+    activityEmpty: 'No activity yet',
+    activityJoined: 'joined',
+    activityLeft: 'left',
   },
   theme: {
     light: 'Light',

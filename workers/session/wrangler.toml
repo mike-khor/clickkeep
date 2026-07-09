@@ -19,3 +19,10 @@ preview_id = "PLACEHOLDER_PREVIEW_KV_ID"
 
 [observability]
 enabled = true
+
+# The dev worker binds to loopback (127.0.0.1) by default — safe for
+# browser-on-Mac testing. Session ownership is implicit ("you opened it,
+# you control it"), so an unauthenticated worker on the LAN would let any
+# nearby device interfere with rehearsals. To test group mode from a
+# phone on the same Wi-Fi, opt in explicitly with `pnpm worker:dev:lan`
+# (which passes `--ip 0.0.0.0`). See apps/web/.env.example.

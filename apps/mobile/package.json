@@ -1,0 +1,20 @@
+{
+  "name": "@clickkeep/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "cap": "cap",
+    "ios:open": "cap open ios",
+    "ios:sync": "cap sync ios",
+    "ios:run": "cap run ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/ios": "^7.0.0",
+    "@capacitor/haptics": "^7.0.0",
+    "@clickkeep/native-metronome": "workspace:*"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0"
+  }
+}

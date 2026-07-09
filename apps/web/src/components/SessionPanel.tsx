@@ -12,6 +12,9 @@ import {
 } from '../lib/url-session.js';
 import { COPY } from '../copy/strings.js';
 import { Sheet } from './Sheet.js';
+import { MemberActivityLog } from './MemberActivityLog.js';
+import { useMemberActivityLog } from '../hooks/useMemberActivityLog.js';
+import type { ActivityEvent } from '../lib/session-activity.js';
 
 const WORKER_URL = (import.meta.env.VITE_SESSION_WORKER_URL as string | undefined) ?? 'http://localhost:8787';
 
@@ -46,6 +49,20 @@ export function SessionPanel(): JSX.Element {
   const [copied, setCopied] = useState(false);
   const setSessionRole = useMetronome((s) => s.setSessionRole);
   const sessionRole = useMetronome((s) => s.sessionRole);
+  // Bumped once per `connect()` call so the activity-log hook can tell fresh
+  // connections apart (even a rejoin to the same code produces a new nonce)
+  // and reset its baseline / clear its log without SessionPanel having to
+  // remember to do so at every reset seam.
+  const [connectionNonce, setConnectionNonce] = useState(0);
+  // Owner-only, opt-in join/leave log derived from member-count deltas. The
+  // hook owns the baseline ref, the log state, and the localStorage-backed
+  // opt-in — see hooks/useMemberActivityLog.ts. Hidden entirely from members
+  // (gated below by sessionRole).
+  const {
+    events: activityLog,
+    enabled: activityEnabled,
+    onToggle: handleToggleActivity,
+  } = useMemberActivityLog(memberCount, connectionNonce === 0 ? null : `conn-${connectionNonce}`);
   // Tracks the code of the connection we *automatically* started from the URL
   // on mount. Used to decide whether to drop a stale owner secret when the
   // worker rejects the auto-rejoin's `claim-owner`. We deliberately do NOT
@@ -181,11 +198,17 @@ export function SessionPanel(): JSX.Element {
     // Optimistically reflect the intended role; the worker is the final word —
     // if it rejects ownership (claim-owner failure) onError will flip us back.
     setSessionRole(ownerSecret !== null ? 'owner' : 'member');
+    // Fresh connection: bump the nonce so useMemberActivityLog resets its
+    // baseline and clears the log. Works even when re-joining the same code
+    // (the nonce is what changes, not the code).
+    setConnectionNonce((n) => n + 1);
     const wsScheme = WORKER_URL.startsWith('https') ? 'wss' : 'ws';
     const wsUrl = `${WORKER_URL.replace(/^https?/, wsScheme)}/sessions/${codeToUse}/ws`;
     const c = new SessionClient(wsUrl, ownerSecret, {
       onState: applyIncomingState,
-      onMemberCount: setMemberCount,
+      onMemberCount: (n) => {
+        setMemberCount(n);
+      },
       onClockEstimate: (e) => {
         setStatus('connected');
         setRttMs(Math.round(e.rttMs));
@@ -287,6 +310,9 @@ export function SessionPanel(): JSX.Element {
     setRttMs(null);
     setStatus('idle');
     setSessionRole('solo');
+    // Nonce back to 0 → useMemberActivityLog treats connectionKey as null,
+    // resets baseline, clears the log.
+    setConnectionNonce(0);
     useMetronome.getState().setSessionAnchorMs(null);
     useMetronome.getState().setSessionClockOffsetMs(0);
   };
@@ -357,6 +383,9 @@ export function SessionPanel(): JSX.Element {
               setOpen(false);
             }}
             error={error}
+            activityEnabled={activityEnabled}
+            activityLog={activityLog}
+            onToggleActivity={handleToggleActivity}
           />
         ) : (
           <DisconnectedView
@@ -427,6 +456,9 @@ interface ConnectedViewProps {
   onShare: () => void;
   onLeave: () => void;
   error: string | null;
+  activityEnabled: boolean;
+  activityLog: ActivityEvent[];
+  onToggleActivity: () => void;
 }
 
 function ConnectedView({
@@ -439,6 +471,9 @@ function ConnectedView({
   onShare,
   onLeave,
   error,
+  activityEnabled,
+  activityLog,
+  onToggleActivity,
 }: ConnectedViewProps): JSX.Element {
   const memberLabel = `${memberCount} ${memberCount === 1 ? COPY.session.membersOne : COPY.session.membersMany}`;
   return (
@@ -453,6 +488,11 @@ function ConnectedView({
           {sessionRole === 'owner' ? ` · ${COPY.session.ownerBadge}` : ''}
         </div>
       </div>
+
+      {/* Owner-only, opt-in secondary affordance — never rendered for members. */}
+      {sessionRole === 'owner' && (
+        <MemberActivityLog enabled={activityEnabled} onToggleEnabled={onToggleActivity} events={activityLog} />
+      )}
 
       <div className="flex gap-2">
         <button

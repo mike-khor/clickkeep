@@ -1,6 +1,7 @@
 export { startClick } from './scheduler.js';
 export type { RunningClick, SchedulerOptions } from './scheduler.js';
-export { pulse, accentPulse } from './haptic.js';
+export { pulse, accentPulse, setHapticImpl } from './haptic.js';
+export type { HapticImpl } from './haptic.js';
 export {
   getVoice,
   pitchedVoice,

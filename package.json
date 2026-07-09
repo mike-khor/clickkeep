@@ -16,6 +16,7 @@
     "test:e2e": "pnpm --filter @clickkeep/web e2e",
     "lint": "pnpm -r lint",
     "worker:dev": "pnpm --filter @clickkeep/session-worker dev",
+    "worker:dev:lan": "pnpm --filter @clickkeep/session-worker dev:lan",
     "worker:deploy": "pnpm --filter @clickkeep/session-worker deploy"
   },
   "devDependencies": {
